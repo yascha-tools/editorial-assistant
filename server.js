@@ -107,36 +107,41 @@ app.post('/api/fetch-doc', async (req, res) => {
       let title = '';
 
       // First, try to extract from JSON preloads (works for drafts and some posts)
-      const scriptTags = $('script').filter((i, el) => {
-        const text = $(el).html() || '';
-        return text.includes('window._preloads');
-      });
+      const allScripts = $('script');
+      allScripts.each((i, el) => {
+        if (content && content.length > 100) return; // Already found content
 
-      if (scriptTags.length > 0) {
-        const scriptContent = $(scriptTags[0]).html();
-        // Extract JSON from window._preloads = {...}
-        const jsonMatch = scriptContent.match(/window\._preloads\s*=\s*JSON\.parse\(["'](.+?)["']\)/s);
-        if (jsonMatch) {
-          try {
-            // Unescape the JSON string
-            const jsonStr = jsonMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-            const preloads = JSON.parse(jsonStr);
+        const scriptContent = $(el).html() || '';
+        if (scriptContent.includes('body_html') && scriptContent.includes('window._preloads')) {
+          // Extract the JSON string from: window._preloads = JSON.parse("...")
+          const jsonMatch = scriptContent.match(/window\._preloads\s*=\s*JSON\.parse\("(.+)"\)/s);
+          if (jsonMatch) {
+            try {
+              // The JSON is escaped - we need to unescape it
+              // First unescape the outer string escaping
+              let jsonStr = jsonMatch[1];
+              // Replace escaped quotes and backslashes
+              jsonStr = jsonStr.replace(/\\"/g, '"');
+              jsonStr = jsonStr.replace(/\\\\/g, '\\');
 
-            // Look for post data in various locations
-            const post = preloads.post || (preloads.posts && preloads.posts[0]);
-            if (post && post.body_html) {
-              title = post.title || '';
-              // Parse HTML content
-              const $body = cheerio.load(post.body_html);
-              content = $body('p, h1, h2, h3, h4, blockquote, li').map((i, el) => {
-                return $body(el).text().trim();
-              }).get().join('\n\n');
+              const preloads = JSON.parse(jsonStr);
+
+              // Look for post data in various locations
+              const post = preloads.post || (preloads.posts && preloads.posts[0]);
+              if (post && post.body_html) {
+                title = post.title || '';
+                // Parse HTML content
+                const $body = cheerio.load(post.body_html);
+                content = $body('p, h1, h2, h3, h4, blockquote, li').map((idx, elem) => {
+                  return $body(elem).text().trim();
+                }).get().filter(t => t.length > 0).join('\n\n');
+              }
+            } catch (e) {
+              console.log('JSON parse failed:', e.message);
             }
-          } catch (e) {
-            console.log('JSON parse failed, falling back to HTML extraction');
           }
         }
-      }
+      });
 
       // Fall back to HTML selectors if JSON extraction failed
       if (!content || content.length < 100) {

@@ -281,15 +281,32 @@ function renderCopyEdit(text) {
   const issuesText = parts[1] || '';
 
   // Parse [[ISSUE: text]] markers in article
+  // Track unique issues so repeated text gets the same number
   const issueRegex = /\[\[ISSUE:\s*(.+?)\]\]/g;
-  let issueIndex = 1;
+  const seenIssues = new Map(); // Map of issue text -> assigned number
+  let nextIssueNum = 1;
+  const uniqueIssues = []; // Track unique issues in order of first appearance
+
   const html = articleText.replace(issueRegex, (match, problemText) => {
-    return `<span class="edit-issue" title="See issue #${issueIndex}">${escapeHtml(problemText)}</span><sup>[${issueIndex++}]</sup>`;
+    const normalizedText = problemText.trim().toLowerCase();
+    let issueNum;
+
+    if (seenIssues.has(normalizedText)) {
+      // Same issue seen before - reuse its number
+      issueNum = seenIssues.get(normalizedText);
+    } else {
+      // New issue - assign next number
+      issueNum = nextIssueNum++;
+      seenIssues.set(normalizedText, issueNum);
+      uniqueIssues.push({ num: issueNum, text: problemText.trim() });
+    }
+
+    return `<span class="edit-issue" title="See issue #${issueNum}">${escapeHtml(problemText)}</span><sup>[${issueNum}]</sup>`;
   });
 
   copyeditOutput.innerHTML = html.replace(/\n/g, '<br>');
 
-  // Parse the issues list
+  // Parse the issues list from AI response
   const issueListRegex = /(\d+)\.\s*"([^"]+)"\s*->\s*"([^"]+)"\s*\(([^)]+)\)/g;
   const issues = [];
   let match;
