@@ -306,11 +306,13 @@ function renderCopyEdit(text) {
 
   copyeditOutput.innerHTML = html.replace(/\n/g, '<br>');
 
-  // Parse the issues list from AI response
-  const issueListRegex = /(\d+)\.\s*"([^"]+)"\s*->\s*"([^"]+)"\s*\(([^)]+)\)/g;
+  // Parse the issues list from AI response - try multiple formats
   const issues = [];
+
+  // Try strict format first: 1. "original" -> "fix" (reason)
+  const strictRegex = /(\d+)\.\s*[""]([^""]+)[""]\s*(?:->|→)\s*[""]([^""]+)[""]\s*\(([^)]+)\)/g;
   let match;
-  while ((match = issueListRegex.exec(issuesText)) !== null) {
+  while ((match = strictRegex.exec(issuesText)) !== null) {
     issues.push({
       index: match[1],
       original: match[2],
@@ -319,10 +321,42 @@ function renderCopyEdit(text) {
     });
   }
 
+  // If strict parsing found fewer issues than marked in text, try looser parsing
+  if (issues.length < seenIssues.size) {
+    // Try: 1. "text" → "fix" — reason (or with dashes/colons)
+    const looseRegex = /(\d+)\.\s*[""]([^""]+)[""]\s*(?:->|→|:)\s*[""]([^""]+)[""]\s*[—\-–:]\s*(.+?)(?=\n\d+\.|$)/gs;
+    issues.length = 0; // Reset
+    while ((match = looseRegex.exec(issuesText)) !== null) {
+      issues.push({
+        index: match[1],
+        original: match[2],
+        fix: match[3],
+        reason: match[4].trim()
+      });
+    }
+  }
+
+  // Final fallback: just show numbered lines as-is
+  if (issues.length === 0 && issuesText.trim()) {
+    const lines = issuesText.trim().split('\n').filter(l => /^\d+\./.test(l.trim()));
+    lines.forEach((line, i) => {
+      issues.push({
+        index: String(i + 1),
+        original: '',
+        fix: '',
+        reason: line.replace(/^\d+\.\s*/, '')
+      });
+    });
+  }
+
   if (issues.length > 0) {
-    copyeditIssuesList.innerHTML = issues.map(issue =>
-      `<li><strong>[${issue.index}]</strong> "${escapeHtml(issue.original)}" → "${escapeHtml(issue.fix)}" — ${escapeHtml(issue.reason)}</li>`
-    ).join('');
+    copyeditIssuesList.innerHTML = issues.map(issue => {
+      if (issue.original && issue.fix) {
+        return `<li><strong>[${issue.index}]</strong> "${escapeHtml(issue.original)}" → "${escapeHtml(issue.fix)}" — ${escapeHtml(issue.reason)}</li>`;
+      } else {
+        return `<li><strong>[${issue.index}]</strong> ${escapeHtml(issue.reason)}</li>`;
+      }
+    }).join('');
     copyeditIssues.classList.remove('hidden');
   } else {
     copyeditIssues.classList.add('hidden');
