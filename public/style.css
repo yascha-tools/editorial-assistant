@@ -290,6 +290,19 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+.headline-style {
+  display: inline-block;
+  background: #1a365d;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* Social Media */
 .social-tabs {
   display: flex;

@@ -29,6 +29,7 @@ const regenerateBtn = document.getElementById('regenerate-btn');
 const socialSection = document.getElementById('social-section');
 const socialContent = document.getElementById('social-content');
 const tabButtons = document.querySelectorAll('.tab-btn');
+const regenerateSocialBtn = document.getElementById('regenerate-social-btn');
 
 const copyeditSection = document.getElementById('copyedit-section');
 const copyeditOutput = document.getElementById('copyedit-output');
@@ -239,6 +240,7 @@ function handleResult(task, data) {
 function renderHeadlines(suggestions) {
   headlinesList.innerHTML = suggestions.map((s, i) => `
     <div class="headline-card">
+      <span class="headline-style">${escapeHtml(s.style || ['Straight', 'Provocative', 'Creative'][i])}</span>
       <h3>${escapeHtml(s.headline)}</h3>
       <p>${escapeHtml(s.dek)}</p>
       <button class="copy-btn secondary-btn" onclick="copyText('${escapeForOnclick(s.headline + '\\n\\n' + s.dek)}')">Copy</button>
@@ -270,6 +272,35 @@ regenerateBtn.addEventListener('click', async () => {
   } finally {
     regenerateBtn.disabled = false;
     regenerateBtn.textContent = 'Regenerate';
+  }
+});
+
+// Regenerate social media posts
+regenerateSocialBtn.addEventListener('click', async () => {
+  const text = articleText.value.trim();
+  if (!text) return;
+
+  regenerateSocialBtn.disabled = true;
+  regenerateSocialBtn.textContent = 'Generating...';
+
+  try {
+    const response = await fetch('/api/regenerate-social', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, styleGuide: socialGuide.value })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+
+    // Update all platforms
+    socialData = data.suggestions;
+    renderSocialPosts();
+  } catch (err) {
+    console.error('Regenerate social error:', err);
+  } finally {
+    regenerateSocialBtn.disabled = false;
+    regenerateSocialBtn.textContent = 'Regenerate';
   }
 });
 

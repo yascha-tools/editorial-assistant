@@ -215,17 +215,24 @@ function createHeadlinePrompt(text, styleGuide) {
 
   return `You are an expert editor for Persuasion, a magazine focused on defending liberal democracy and promoting open debate.
 ${guideSection}
-Generate 3 compelling headline and dek (subheadline) pairs for this article. Each pair should:
+Generate 3 headline and dek (subheadline) pairs for this article, each with a different style:
+
+1. STRAIGHT: Clear, direct, to the point. States the main argument or topic plainly.
+
+2. PROVOCATIVE: Grabs attention, makes a bold claim or poses a challenge. More assertive than straight, but NOT clickbait.
+
+3. CREATIVE: Playful, clever, or unexpected. Can use wordplay, cultural references, or surprising framing. Example from Persuasion's past: "All COPs Are Bastards" (about climate conferences). Be willing to take creative risks.
+
+All three should:
 - Capture the essence of the article
-- Be engaging and thought-provoking
 - Match Persuasion's tone: intelligent, accessible, principled
 
 Format your response as JSON:
 {
   "suggestions": [
-    { "headline": "...", "dek": "..." },
-    { "headline": "...", "dek": "..." },
-    { "headline": "...", "dek": "..." }
+    { "style": "Straight", "headline": "...", "dek": "..." },
+    { "style": "Provocative", "headline": "...", "dek": "..." },
+    { "style": "Creative", "headline": "...", "dek": "..." }
   ]
 }
 
@@ -266,13 +273,19 @@ function createCopyEditPrompt(text, styleGuide, startIssueNum = 1) {
 
   return `You are an expert copy editor for Persuasion magazine.
 ${guideSection}
-Review this article for:
+Review this article ONLY for prose and style issues:
 - Spelling and grammar errors
 - Punctuation issues
 - Awkward phrasing
 - Clarity problems
 - Style inconsistencies
-- Factual inconsistencies within the text
+- Repetitive word choices
+
+DO NOT flag:
+- Factual claims or fact-checking issues (there's a separate fact-checker for that)
+- Dates or timeline issues
+- Whether statistics or claims are accurate
+- "Toward" vs "towards" (both are acceptable)
 
 For each issue you find, mark ONLY the problematic text using this exact format:
 [[ISSUE: problematic text here]]
@@ -377,7 +390,10 @@ function createFactCheckPrompt(text, styleGuide) {
     ? `\n\nFact-Checking Guidelines:\n${styleGuide}\n\n---\n\n`
     : '';
 
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
   return `You are a fact-checker for Persuasion magazine.
+Today's date is ${today} (or possibly later - this article was written recently).
 ${guideSection}
 Review this article and verify factual claims. For each significant claim:
 
@@ -393,21 +409,18 @@ Review this article and verify factual claims. For each significant claim:
 4. If TIME-SENSITIVE (requires current data you don't have - recent statistics, current officeholders, ongoing events, recent developments):
    [[CHECK_CURRENT: the claim text | what specifically needs to be verified with current sources]]
 
-IMPORTANT: Your knowledge has a cutoff date. For any claims about:
-- Current statistics or polls
-- Who currently holds office or positions
-- Recent events (within the last year)
-- Ongoing situations that may have changed
-- Recent legislation or policy changes
-You MUST mark these as CHECK_CURRENT rather than VERIFIED, even if they match your training data.
+IMPORTANT GUIDELINES:
+- Today is ${today}. Do NOT flag dates as incorrect just because they refer to recent events.
+- Do NOT question whether recent events happened - assume the author has current knowledge.
+- Only mark CHECK_CURRENT for claims that genuinely need verification (statistics, exact quotes, etc.)
+- Do NOT flag every date or timeline mentioned - only flag if something is clearly historically wrong.
 
 Focus on:
-- Statistics and numbers
-- Historical facts
+- Statistics and numbers that can be verified
+- Historical facts (not recent events)
 - Quotes and attributions
 - Scientific claims
 - Named events or policies
-- Current affairs and recent developments
 
 Output the COMPLETE article with claims marked. Not every sentence needs marking - only factual claims that can be verified.
 After the article, do not add any additional commentary.
@@ -551,6 +564,38 @@ app.post('/api/regenerate-headlines', async (req, res) => {
     res.json({ suggestions: data.suggestions });
   } catch (error) {
     console.error('Regenerate error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Regenerate social media endpoint
+app.post('/api/regenerate-social', async (req, res) => {
+  const { text, styleGuide } = req.body;
+
+  if (!text || text.trim() === '') {
+    return res.status(400).json({ error: 'Article text is required' });
+  }
+
+  try {
+    const platforms = ['substack', 'twitter', 'instagram'];
+    const results = { substack: [], twitter: [], instagram: [] };
+
+    await Promise.all(
+      platforms.map(async (platform) => {
+        const response = await anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2048,
+          messages: [{ role: 'user', content: createSocialPrompt(text, platform, styleGuide) }]
+        });
+        const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
+        const data = JSON.parse(jsonMatch[0]);
+        results[platform] = data.suggestions;
+      })
+    );
+
+    res.json({ suggestions: results });
+  } catch (error) {
+    console.error('Regenerate social error:', error);
     res.status(500).json({ error: error.message });
   }
 });
