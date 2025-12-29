@@ -36,16 +36,18 @@ h1 {
 
 /* Toggle Button */
 .toggle-btn {
-  background: #f0f0f0;
-  border: 1px solid #ddd;
+  background: #e8eef5;
+  border: 2px solid #1a365d;
+  color: #1a365d;
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
+  font-weight: 500;
   border-radius: 4px;
   cursor: pointer;
 }
 
 .toggle-btn:hover {
-  background: #e5e5e5;
+  background: #d4e0ed;
 }
 
 .toggle-btn.active {
