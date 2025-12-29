@@ -259,7 +259,7 @@ Article:
 ${text}`;
 }
 
-function createCopyEditPrompt(text, styleGuide) {
+function createCopyEditPrompt(text, styleGuide, startIssueNum = 1) {
   const guideSection = styleGuide?.trim()
     ? `\n\nCopy-Editing Style Guide:\n${styleGuide}\n\n---\n\n`
     : '';
@@ -279,14 +279,97 @@ For each issue you find, mark ONLY the problematic text using this exact format:
 
 Do NOT include the fix in the marked text - just highlight what needs attention.
 
-After the complete article, add a section starting with "---ISSUES---" followed by a numbered list of all issues in this format:
-1. "problematic text" -> "suggested fix" (reason)
-2. "problematic text" -> "suggested fix" (reason)
+After the complete article, add a section starting with "---ISSUES---" followed by a numbered list of all issues in this format (start numbering at ${startIssueNum}):
+${startIssueNum}. "problematic text" -> "suggested fix" (reason)
+${startIssueNum + 1}. "problematic text" -> "suggested fix" (reason)
 
 Output the COMPLETE article with issues marked, then the issues list.
 
 Article to edit:
 ${text}`;
+}
+
+// Helper to split text into chunks by paragraphs
+function splitIntoChunks(text, maxChunkSize = 4000) {
+  const paragraphs = text.split(/\n\n+/);
+  const chunks = [];
+  let currentChunk = '';
+
+  for (const para of paragraphs) {
+    if (currentChunk.length + para.length + 2 > maxChunkSize && currentChunk.length > 0) {
+      chunks.push(currentChunk.trim());
+      currentChunk = para;
+    } else {
+      currentChunk += (currentChunk ? '\n\n' : '') + para;
+    }
+  }
+
+  if (currentChunk.trim()) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks.length > 0 ? chunks : [text];
+}
+
+// Process copy-edit in chunks for long articles
+async function processCopyEditChunked(text, styleGuide, sendProgress) {
+  const CHUNK_THRESHOLD = 5000; // Only chunk if longer than this
+
+  if (text.length <= CHUNK_THRESHOLD) {
+    // Short article - process normally
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16384,
+      messages: [{ role: 'user', content: createCopyEditPrompt(text, styleGuide, 1) }]
+    });
+    return response.content[0].text;
+  }
+
+  // Long article - split into chunks
+  const chunks = splitIntoChunks(text, 4000);
+  sendProgress('copyEdit', `Processing ${chunks.length} sections...`);
+
+  let allMarkedText = '';
+  let allIssues = [];
+  let issueCounter = 1;
+
+  // Process chunks in parallel (max 3 at a time to avoid rate limits)
+  const batchSize = 3;
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+    const startNums = batch.map((_, idx) => issueCounter + idx * 10); // Estimate 10 issues per chunk max
+
+    sendProgress('copyEdit', `Processing sections ${i + 1}-${Math.min(i + batchSize, chunks.length)} of ${chunks.length}...`);
+
+    const batchResults = await Promise.all(
+      batch.map((chunk, idx) =>
+        anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 8192,
+          messages: [{ role: 'user', content: createCopyEditPrompt(chunk, styleGuide, startNums[idx]) }]
+        }).then(r => r.content[0].text)
+      )
+    );
+
+    // Merge results
+    for (const result of batchResults) {
+      const parts = result.split(/---ISSUES---/i);
+      const markedText = parts[0].trim();
+      const issuesText = parts[1] || '';
+
+      allMarkedText += (allMarkedText ? '\n\n' : '') + markedText;
+
+      // Extract and renumber issues
+      const issueMatches = issuesText.matchAll(/\d+\.\s*(.+?)(?=\n\d+\.|$)/gs);
+      for (const match of issueMatches) {
+        allIssues.push(`${issueCounter}. ${match[1].trim()}`);
+        issueCounter++;
+      }
+    }
+  }
+
+  // Combine marked text with renumbered issues list
+  return allMarkedText + '\n\n---ISSUES---\n' + allIssues.join('\n');
 }
 
 function createFactCheckPrompt(text, styleGuide) {
@@ -413,17 +496,15 @@ app.post('/api/process-stream', async (req, res) => {
       }
     }
 
-    // Copy-Edit
+    // Copy-Edit (with chunking for long articles)
     if (tasks.copyEdit) {
       sendProgress('copyEdit', 'Analyzing article for copy-editing...');
       promises.push(
-        anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 16384,
-          messages: [{ role: 'user', content: createCopyEditPrompt(text, styleGuides.copyEdit) }]
-        }).then(response => {
-          sendResult('copyEdit', { text: response.content[0].text });
-        }).catch(e => sendError('copyEdit', e.message))
+        processCopyEditChunked(text, styleGuides.copyEdit, sendProgress)
+          .then(result => {
+            sendResult('copyEdit', { text: result });
+          })
+          .catch(e => sendError('copyEdit', e.message))
       );
     }
 
