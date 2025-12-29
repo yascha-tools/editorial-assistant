@@ -1,0 +1,149 @@
+# PERSUASION HEADLINES & DEK STYLE GUIDE
+
+## Overview
+Headlines and deks (subheadlines) for Persuasion should reflect the publication's intellectual seriousness while remaining accessible and compelling. The goal is to intrigue readers who care about ideas, democracy, and liberal values—not to chase clicks with sensationalism.
+
+---
+
+## HEADLINE PRINCIPLES
+
+### Tone
+- **Confident and direct**, not hedging or equivocating
+- **Intellectually serious** but not academic or jargon-heavy
+- **Provocative when warranted**, but never clickbait
+- Willing to take a clear stance
+
+### Structure Patterns
+
+**1. Declarative Statements** (most common)
+Clear assertions that take a position:
+- "We All Live in a Village Now"
+- "Lawfare Makes Us All Less Free"
+- "The Dems Are Lying to Themselves About Why They Lost"
+- "Biden Should Run in 2024"
+
+**2. Noun Phrases**
+Evocative titles that name a concept or phenomenon:
+- "The Real Danger in 2024"
+- "The World We Have Lost"
+- "Normalcy and Horror"
+- "The Great Purge"
+
+**3. Imperative/Exhortation**
+Calls to action or warnings:
+- "Beware the Merchants of Rage"
+- "Confronting Our Autocrat-In-Waiting"
+
+**4. Questions** (use sparingly)
+Only when the article genuinely explores an open question:
+- Avoid rhetorical questions where the answer is obvious
+
+### What to Avoid
+- Clickbait formulas ("You Won't Believe...", "X Things That...")
+- Excessive punctuation or ALL CAPS
+- Puns or wordplay (unless genuinely clever and relevant)
+- Vague abstractions that don't signal the article's argument
+- Headlines that could apply to any publication
+
+### Length
+- Aim for 4-8 words
+- Can go longer if the phrasing is compelling
+- Short and punchy often works best
+
+---
+
+## DEK (SUBHEADLINE) PRINCIPLES
+
+### Purpose
+The dek should:
+1. Clarify what the article is actually about
+2. Add information the headline doesn't provide
+3. Give readers a reason to click through
+4. For interviews/podcasts: identify the guest and topic
+
+### Tone
+- More explanatory than the headline
+- Can be slightly longer and more detailed
+- Should complement, not repeat, the headline
+
+### Structure Patterns
+
+**1. Argument Summary**
+States the article's core claim:
+- Headline: "The Dems Are Lying to Themselves About Why They Lost"
+- Dek: "And that will make it much harder for them to turn the ship around."
+
+**2. Stakes/Consequence**
+Explains why this matters:
+- Headline: "Lawfare Makes Us All Less Free"
+- Dek: "Comey's indictment sets a very dangerous precedent."
+
+**3. Framing Statement**
+Provides context:
+- Headline: "We All Live in a Village Now"
+- Dek: "How social media destroyed the freedoms of city life."
+
+**4. Guest + Topic** (for interviews)
+- Headline: "William Galston on 2024 and Trump's Conviction"
+- Dek: [Interview deks typically summarize key discussion points]
+
+**5. Action Statement**
+What the piece does:
+- Headline: "Confronting Our Autocrat-In-Waiting: Part I"
+- Dek: "Larry Diamond analyzes Trump's coming assault on American institutions—and proposes a gameplan for fighting back."
+
+### What to Avoid in Deks
+- Simply restating the headline in different words
+- Burying the lede—put the most compelling info first
+- Excessive length (aim for one sentence, two max)
+- Vague promises ("A deep dive into..." "An exploration of...")
+
+---
+
+## EXAMPLES: HEADLINE + DEK PAIRS
+
+**Strong Examples:**
+
+1. "We All Live in a Village Now"
+   "How social media destroyed the freedoms of city life."
+   *Why it works: Intriguing, counterintuitive headline; dek explains the mechanism*
+
+2. "The Dems Are Lying to Themselves About Why They Lost"
+   "And that will make it much harder for them to turn the ship around."
+   *Why it works: Bold claim in headline; dek adds stakes/consequence*
+
+3. "Confronting Our Autocrat-In-Waiting: Part I"
+   "Larry Diamond analyzes Trump's coming assault on American institutions—and proposes a gameplan for fighting back."
+   *Why it works: Clear framing; dek tells you exactly what you'll get*
+
+4. "Biden Should Run in 2024"
+   "Despite his flaws, he is the best hope for the Democrats and for the country."
+   *Why it works: Takes a clear position; dek gives the argument's core*
+
+---
+
+## VOICE NOTES
+
+Persuasion headlines should sound like they come from:
+- A confident public intellectual
+- Someone willing to make arguments, not just describe events
+- A publication that respects its readers' intelligence
+- Writers who care about liberal democracy and take ideas seriously
+
+They should NOT sound like:
+- Academic journal articles
+- Breathless breaking news
+- Partisan talking points
+- Generic op-ed headlines
+
+---
+
+## GENERATING HEADLINES: CHECKLIST
+
+When creating headline suggestions, verify:
+- [ ] Does it take a clear angle or make a claim?
+- [ ] Would a Persuasion reader find this compelling?
+- [ ] Does it reflect the article's actual argument?
+- [ ] Is it distinctive—not something every publication would write?
+- [ ] Does the dek add real information?
+- [ ] Together, do headline + dek give readers a reason to read?

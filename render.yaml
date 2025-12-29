@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: editorial-assistant
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        sync: false

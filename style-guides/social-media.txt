@@ -1,0 +1,184 @@
+# PERSUASION SOCIAL MEDIA COPY STYLE GUIDE
+
+## Overview
+Social media copy for Persuasion should drive engagement while maintaining the publication's intellectual credibility. The goal is to intrigue readers and prompt clicks—without resorting to clickbait or misrepresenting content.
+
+---
+
+## GENERAL PRINCIPLES
+
+### Voice
+- Confident and intellectually engaged
+- Willing to be provocative, but never trolling
+- Treats the audience as intelligent adults
+- Conveys that this is a publication of ideas worth engaging with
+
+### Goals
+1. Convey the article's core argument or hook
+2. Create curiosity without misleading
+3. Signal that this is substantive content worth reading
+4. Match platform conventions without compromising voice
+
+---
+
+## PLATFORM-SPECIFIC GUIDELINES
+
+### SUBSTACK NOTES
+
+**Character limit:** Flexible (can be longer)
+
+**Tone:** Most similar to Persuasion's editorial voice—thoughtful, can be more expansive
+
+**Best practices:**
+- Can include context or framing not in the headline
+- Can pose questions the article addresses
+- Can highlight a particularly striking quote or claim
+- Works well for setting up the stakes of the piece
+
+**Structure options:**
+1. **Hook + context:** "Social media was supposed to connect us. Instead, it's recreated the surveillance and social control of village life—without any of the warmth."
+
+2. **Question + answer preview:** "Why did Democrats really lose in 2024? It's not the answer party insiders want to hear."
+
+3. **Quote + framing:** "'I had suspicions about his mental decline, but now I realize he's a total fascist.' —Mark Milley on Trump. Larry Diamond on what comes next."
+
+4. **Stakes statement:** "The Trump transition team is exploring court-martials for military officers—possibly even treason trials. This is what authoritarian consolidation looks like."
+
+**What to avoid:**
+- Walls of text (even though length is allowed)
+- Passive academic framing
+- Excessive hashtags
+
+---
+
+### TWITTER/X
+
+**Character limit:** 280 characters
+
+**Tone:** Punchy, direct, can be slightly more provocative than other platforms
+
+**Best practices:**
+- Lead with the most compelling claim or hook
+- Use the full 280 characters strategically—sometimes shorter hits harder
+- Numbers and specific claims perform well
+- Can include a brief pull quote if striking
+
+**Structure options:**
+1. **Bold claim:** "We all live in a village now—social media has recreated the surveillance of pre-modern life, minus the community."
+
+2. **Statistic/fact + implication:** "Trump's transition team is building lists of military officers to potentially court-martial. This is how democratic backsliding begins."
+
+3. **Provocative framing:** "Democrats are lying to themselves about why they lost. And it's going to cost them."
+
+4. **Quote:** "'He is the most dangerous person to this country. A fascist to the core.' —Gen. Mark Milley on Trump"
+
+**What to avoid:**
+- Thread-bait ("A thread on...")
+- Excessive emojis
+- Hashtag stuffing
+- Vague teasers ("Interesting piece on politics")
+
+**Character count tips:**
+- Every character counts—edit ruthlessly
+- Em-dashes and colons can help compress
+- "& " instead of "and" if desperate for space (use sparingly)
+
+---
+
+### INSTAGRAM
+
+**Tone:** Slightly more accessible, visual-first platform
+
+**Caption length:** Can be longer, but front-load the hook (text gets cut off)
+
+**Best practices:**
+- First line must hook—it's all most people see
+- Can be more personal/conversational than Twitter
+- Emojis acceptable but use sparingly and purposefully
+- Hashtags at end if used (3-5 max, relevant ones only)
+
+**Structure:**
+1. **Hook line** (visible before "more")
+2. **Brief expansion** (2-3 sentences)
+3. **Call to action** ("Link in bio")
+4. **Hashtags** (optional, at end)
+
+**Example:**
+"Social media promised to connect us. Instead, it recreated village life—where everyone watches everyone, and deviation is punished.
+
+Yascha Mounk on how we lost the freedoms of city life. Link in bio.
+
+#democracy #socialmedia #FreeSpeech"
+
+**What to avoid:**
+- Overly formal or academic language
+- Burying the hook
+- Excessive hashtags that look spammy
+- Ignoring the visual element (pair with compelling image)
+
+---
+
+## CONTENT TYPES
+
+### Opinion/Essay
+- Lead with the argument or most provocative claim
+- Make clear this is a substantive take, not just reporting
+
+### Interview/Podcast
+- Name the guest and their credentials briefly
+- Highlight one compelling topic or revelation
+- "Yascha Mounk talks with [Guest] about [specific compelling topic]"
+
+### News Analysis
+- What's the angle that makes this different from straight news?
+- Why should someone read Persuasion's take specifically?
+
+### Announcements/Community
+- Can be warmer, more direct
+- Clear call to action
+
+---
+
+## WHAT MAKES PERSUASION SOCIAL COPY DISTINCTIVE
+
+**It should sound like:**
+- An intellectually curious person sharing something worth reading
+- Someone who takes ideas seriously
+- A publication confident in its perspective
+
+**It should NOT sound like:**
+- Generic news aggregation
+- Academic abstracts
+- Partisan rage-bait
+- Clickbait mills
+
+---
+
+## EXAMPLES BY PLATFORM
+
+**Article:** "We All Live in a Village Now" (about social media recreating pre-modern social surveillance)
+
+**Substack Notes:**
+"For most of human history, we lived under the watchful eye of our neighbors—and feared cancellation long before Twitter existed. Urbanization freed us from that cage. Now social media has rebuilt it, stripped of warmth and supercharged by the cruelty of the crowd."
+
+**Twitter/X:**
+"Social media has recreated village life: constant surveillance, swift punishment for deviance, nowhere to hide. The freedoms of the city were a brief historical aberration."
+
+**Instagram:**
+"We escaped the village. Social media dragged us back.
+
+For centuries, cities meant freedom—anonymity, room to be different. Now we're all back under the watchful eye of the crowd.
+
+New from @yaschamounk. Link in bio."
+
+---
+
+## CHECKLIST
+
+Before posting, verify:
+- [ ] Accurately represents the article's content
+- [ ] Would a Persuasion reader find this compelling?
+- [ ] Platform-appropriate length and tone
+- [ ] No typos or errors
+- [ ] Link included/working (or "link in bio" for Instagram)
+- [ ] Doesn't oversell or misrepresent the piece

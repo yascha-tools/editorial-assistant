@@ -1,0 +1,220 @@
+# PERSUASION FACT-CHECK STYLE GUIDE
+
+## Overview
+Fact-checking for Persuasion should verify claims, identify potential inaccuracies, and flag assertions that require additional sourcing—while respecting that opinion journalism necessarily involves interpretation and argument.
+
+---
+
+## SCOPE AND LIMITATIONS
+
+### What This Tool Can Do
+- Verify factual claims against known information
+- Flag statistics, dates, quotes, and names that appear incorrect
+- Identify claims that are contested or require qualification
+- Highlight assertions that need sourcing
+- Note when claims go beyond what evidence supports
+
+### What This Tool Cannot Do
+- Perform real-time web searches for breaking news
+- Access paywalled academic databases
+- Verify quotations against original audio/video
+- Make definitive legal or scientific determinations
+- Replace professional fact-checkers for high-stakes claims
+
+### Important Caveat
+This tool checks claims against the AI's training knowledge (through early 2025). For recent events, emerging stories, or rapidly changing situations, human verification is essential.
+
+---
+
+## CATEGORIES OF CLAIMS
+
+### 1. VERIFIABLE FACTS
+Claims that have objectively correct answers:
+- Dates of events
+- Names and titles
+- Statistics from official sources
+- Historical events
+- Geographic facts
+- Direct quotations from published sources
+
+**Standard:** Flag if incorrect or if unable to verify
+
+### 2. CHARACTERIZATIONS
+Claims that interpret or describe:
+- "Trump's rhetoric has become more extreme"
+- "The Democratic Party has moved left"
+- "This policy was a failure"
+
+**Standard:** Flag if the characterization is:
+- Contradicted by clear evidence
+- Presented as fact when it's contested
+- Missing important context or counterexamples
+
+### 3. PREDICTIONS/PROJECTIONS
+Claims about what will happen:
+- "This will lead to economic collapse"
+- "Democrats will lose in 2024"
+
+**Standard:** Flag if:
+- Presented with false certainty
+- Based on faulty premises
+- Contradicts expert consensus
+
+### 4. OPINIONS/ARGUMENTS
+The core of opinion journalism:
+- "We should expand free speech protections"
+- "This represents a threat to democracy"
+
+**Standard:** Generally do NOT flag opinions as "incorrect"
+- DO flag if opinions rest on factual errors
+- DO flag if presented as consensus when highly contested
+
+---
+
+## VERIFICATION STANDARDS
+
+### HIGH CONFIDENCE: Verified Correct
+- Claim matches reliable, established information
+- Multiple authoritative sources confirm
+- No significant dispute in the record
+
+### MEDIUM CONFIDENCE: Questionable/Unverified
+- Unable to verify from available information
+- Conflicting sources exist
+- Claim is plausible but unconfirmed
+- Wording may be imprecise or overstated
+
+### LOW CONFIDENCE: Likely Incorrect
+- Claim contradicts reliable sources
+- Dates, names, or figures are demonstrably wrong
+- Quotation doesn't match available record
+- Logical impossibility
+
+---
+
+## COMMON FACT-CHECK ISSUES
+
+### Statistics and Numbers
+- Is the number accurate?
+- Is it from a reliable source?
+- Is it being used in proper context?
+- Is the date/timeframe correct?
+- Are comparisons apples-to-apples?
+
+**Red flags:**
+- Round numbers that seem too neat
+- Statistics without sourcing
+- Percentages that don't add up
+- Old data presented as current
+
+### Quotations
+- Is this an exact quote or paraphrase?
+- Is it attributed to the right person?
+- Is it being used in context?
+- Does it reflect what the person actually meant?
+
+**Red flags:**
+- No source for quotation
+- Quote seems too perfect/damning
+- Ellipses that may hide context
+- Attributed to "critics say" or "some argue"
+
+### Historical Claims
+- Did this event happen as described?
+- Are the dates correct?
+- Are causal claims supported?
+- Is the historical parallel apt?
+
+**Red flags:**
+- Sweeping claims about historical consensus
+- Precise details that seem too specific
+- "First ever" or "never before" claims
+- Comparisons that flatten important differences
+
+### Claims About People
+- Are titles and affiliations correct?
+- Did they say/do what's attributed to them?
+- Is characterization of their views fair?
+
+**Red flags:**
+- Inflammatory characterizations without evidence
+- Claims about private actions/motivations
+- Attributing views the person hasn't expressed
+
+### Legal/Scientific Claims
+- Is the legal/scientific characterization accurate?
+- Is there relevant expert disagreement?
+- Are caveats being omitted?
+
+**Red flags:**
+- Presenting contested science as settled
+- Mischaracterizing court rulings
+- Overstating strength of evidence
+
+---
+
+## OUTPUT FORMAT
+
+For each claim checked, provide:
+
+### VERIFIED
+**Claim:** "[exact claim from text]"
+**Status:** Verified correct
+**Note:** [brief confirmation, source if notable]
+
+### QUESTIONABLE
+**Claim:** "[exact claim from text]"
+**Status:** Questionable / Requires verification
+**Concern:** [specific issue]
+**Recommendation:** [what to check or how to qualify]
+
+### INCORRECT
+**Claim:** "[exact claim from text]"
+**Status:** Likely incorrect
+**Issue:** [what's wrong]
+**Correction:** [accurate information if known]
+
+---
+
+## PERSUASION-SPECIFIC CONSIDERATIONS
+
+### Editorial Context
+Persuasion is an opinion publication. Authors are expected to:
+- Make arguments and take positions
+- Interpret events and evidence
+- Express views that may be contested
+
+Fact-checking should focus on **factual accuracy**, not whether arguments are "correct" or views are "balanced."
+
+### Political Sensitivity
+When checking politically charged claims:
+- Apply the same standard regardless of political valence
+- Don't flag opinions as "incorrect" just because they're controversial
+- DO flag factual errors even when they support sympathetic arguments
+- Be especially careful with claims about named individuals
+
+### Common Persuasion Topics
+Articles often address:
+- Democratic backsliding and authoritarianism
+- Free speech and cancel culture
+- Identity politics and progressivism
+- Populism and institutional trust
+
+For these contested topics:
+- Flag claims presented as consensus when genuinely disputed
+- Note when characterizations of opposing views may be unfair
+- Verify specific examples and case studies
+
+---
+
+## CHECKLIST
+
+Before finalizing fact-check:
+- [ ] All verifiable claims identified
+- [ ] Dates and numbers verified where possible
+- [ ] Quotations checked against available sources
+- [ ] Named individuals' titles/affiliations confirmed
+- [ ] Questionable claims flagged with specific concerns
+- [ ] Incorrect claims clearly identified with corrections
+- [ ] Recommendations for verification provided where needed
+- [ ] Distinction maintained between factual errors and contested opinions

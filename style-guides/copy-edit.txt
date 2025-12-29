@@ -1,0 +1,179 @@
+# PERSUASION COPY-EDITING STYLE GUIDE
+
+## Overview
+Persuasion publishes intellectually serious essays on politics, culture, and society from a philosophically liberal perspective. Copy-editing should preserve authorial voice while ensuring clarity, accuracy, and consistency.
+
+---
+
+## GENERAL PRINCIPLES
+
+### Preserve Voice
+- Persuasion publishes distinctive voices—don't flatten them
+- Maintain the author's rhetorical style and characteristic phrasings
+- Fix errors; don't rewrite for style preference
+- When in doubt, flag for the author rather than silently changing
+
+### Prioritize Clarity
+- Ensure arguments are logically structured
+- Flag unclear antecedents, ambiguous phrases, or confusing transitions
+- Break up sentences only when genuinely hard to follow
+- Complex ideas can have complex sentences—that's fine if they're well-constructed
+
+### Maintain Intellectual Rigor
+- Verify that claims are appropriately qualified
+- Flag overstatements or unsupported assertions
+- Ensure quotations are accurate and properly attributed
+- Check that technical or specialized terms are used correctly
+
+---
+
+## MECHANICAL STANDARDS
+
+### Spelling & Usage
+- American English spelling (honor, color, recognize)
+- "Toward" not "towards"
+- "While" for simultaneity; "although" or "whereas" for contrast (flexible)
+- Serial comma (Oxford comma): "France, Germany, and Italy"
+
+### Punctuation
+
+**Em-dashes:**
+- Use without spaces: "The claim—however dubious—was repeated"
+- Use for parenthetical insertions, abrupt breaks, or emphasis
+- Don't overuse; more than two per paragraph may be excessive
+
+**Quotation marks:**
+- Double quotes for direct quotations
+- Single quotes for quotes within quotes
+- Periods and commas inside closing quotation marks
+- Colons and semicolons outside
+
+**Ellipses:**
+- Three dots with spaces: ". . ." for omissions in quotations
+- Or three dots without spaces "..." for trailing off
+
+### Numbers
+- Spell out one through nine; use figures for 10 and above
+- Spell out numbers that begin sentences
+- Use figures for percentages: "5 percent" or "5%"
+- Dates: "January 6, 2021" (not "January 6th, 2021")
+
+### Capitalization
+- Lowercase "president," "senator," etc. when not preceding a name
+- "President Biden" but "the president said"
+- Capitalize formal titles of legislation, court cases, institutions
+- "the Supreme Court" but "the court ruled"
+
+### Titles of Works
+- Italicize book titles, magazine/newspaper names, films
+- Use quotation marks for article titles, essay titles, song titles
+- *The Atlantic*, *The New York Times*
+- "The End of History?" (article)
+
+---
+
+## COMMON ISSUES TO FLAG
+
+### Factual Concerns
+- Dates, statistics, or figures that seem off
+- Quotations that may be paraphrased rather than exact
+- Claims about what someone said or did without citation
+- Historical claims that may be contested
+
+### Logical Issues
+- Non sequiturs or gaps in argument
+- Contradictions within the piece
+- Overgeneralizations ("Everyone agrees that...")
+- False dichotomies
+
+### Style Issues
+- Excessive passive voice when active would be clearer
+- Unnecessarily jargon-heavy passages
+- Sentences that require re-reading to parse
+- Repetitive phrasing or word echoes
+
+### Sensitivity Flags
+- Potentially defamatory statements about named individuals
+- Unverified claims about private figures
+- Legal claims that may need review
+
+---
+
+## POLITICAL & EDITORIAL SENSITIVITIES
+
+### Persuasion's Voice
+Persuasion is philosophically liberal (in the classical sense):
+- Defends free speech, due process, individual rights
+- Skeptical of authoritarianism from left or right
+- Values good-faith disagreement and persuasion over trolling
+- Takes democracy and its institutions seriously
+
+### Balance
+- Don't insert false balance into clearly argued opinion pieces
+- Authors are allowed to take positions
+- But ensure factual claims are accurate regardless of political valence
+- Flag partisan framing that may undermine credibility
+
+### Sensitive Topics
+When articles address contentious issues (identity politics, cancel culture, populism, etc.):
+- Ensure characterizations of opposing views are fair
+- Flag strawman arguments
+- Verify that examples and evidence are accurately described
+- Watch for loaded language that may alienate persuadable readers
+
+---
+
+## FORMATTING FOR SUBSTACK
+
+### Structure
+- Clear paragraph breaks (not overly long paragraphs)
+- Subheadings for longer pieces (##)
+- Block quotes for extended quotations
+- Hyperlinks for sources and references
+
+### Links
+- Link to primary sources when possible
+- Ensure links work and go to intended destinations
+- Link text should be descriptive (not "click here")
+
+### Images
+- Ensure proper attribution/credit
+- Alt text for accessibility
+- Appropriate sizing
+
+---
+
+## COPY-EDIT OUTPUT FORMAT
+
+When flagging issues, use this format:
+
+**ERROR TYPE: [Category]**
+- Original: "[quoted text with issue]"
+- Suggested: "[corrected text]"
+- Reason: [brief explanation]
+
+Categories:
+- SPELLING
+- GRAMMAR
+- PUNCTUATION
+- STYLE
+- FACTUAL
+- CLARITY
+- LOGIC
+- FLAG FOR AUTHOR
+
+---
+
+## CHECKLIST BEFORE PUBLISHING
+
+- [ ] Spelling and grammar checked
+- [ ] Punctuation consistent throughout
+- [ ] Numbers formatted consistently
+- [ ] Names spelled correctly
+- [ ] Titles properly formatted (italics/quotes)
+- [ ] Links working
+- [ ] Quotations verified where possible
+- [ ] No unintentional repetition
+- [ ] Opening paragraph compelling
+- [ ] Closing paragraph satisfying
+- [ ] Headline and dek accurate to content
