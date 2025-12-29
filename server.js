@@ -103,26 +103,65 @@ app.post('/api/fetch-doc', async (req, res) => {
       const html = await response.text();
       const $ = cheerio.load(html);
 
-      // Extract article content - Substack uses various selectors
       let content = '';
-      const selectors = ['.body.markup', '.post-content', '.available-content', 'article .body', '.entry-content'];
+      let title = '';
 
-      for (const selector of selectors) {
-        const element = $(selector);
-        if (element.length > 0) {
-          element.find('button, .subscription-widget, .captioned-image-container figcaption').remove();
-          content = element.find('p, h1, h2, h3, h4, blockquote, li').map((i, el) => {
-            return $(el).text().trim();
-          }).get().join('\n\n');
-          if (content.length > 100) break;
+      // First, try to extract from JSON preloads (works for drafts and some posts)
+      const scriptTags = $('script').filter((i, el) => {
+        const text = $(el).html() || '';
+        return text.includes('window._preloads');
+      });
+
+      if (scriptTags.length > 0) {
+        const scriptContent = $(scriptTags[0]).html();
+        // Extract JSON from window._preloads = {...}
+        const jsonMatch = scriptContent.match(/window\._preloads\s*=\s*JSON\.parse\(["'](.+?)["']\)/s);
+        if (jsonMatch) {
+          try {
+            // Unescape the JSON string
+            const jsonStr = jsonMatch[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+            const preloads = JSON.parse(jsonStr);
+
+            // Look for post data in various locations
+            const post = preloads.post || (preloads.posts && preloads.posts[0]);
+            if (post && post.body_html) {
+              title = post.title || '';
+              // Parse HTML content
+              const $body = cheerio.load(post.body_html);
+              content = $body('p, h1, h2, h3, h4, blockquote, li').map((i, el) => {
+                return $body(el).text().trim();
+              }).get().join('\n\n');
+            }
+          } catch (e) {
+            console.log('JSON parse failed, falling back to HTML extraction');
+          }
+        }
+      }
+
+      // Fall back to HTML selectors if JSON extraction failed
+      if (!content || content.length < 100) {
+        const selectors = ['.body.markup', '.post-content', '.available-content', 'article .body', '.entry-content'];
+
+        for (const selector of selectors) {
+          const element = $(selector);
+          if (element.length > 0) {
+            element.find('button, .subscription-widget, .captioned-image-container figcaption').remove();
+            content = element.find('p, h1, h2, h3, h4, blockquote, li').map((i, el) => {
+              return $(el).text().trim();
+            }).get().join('\n\n');
+            if (content.length > 100) break;
+          }
+        }
+
+        if (!title) {
+          title = $('h1.post-title').text().trim() || $('h1').first().text().trim() || '';
         }
       }
 
       if (!content || content.length < 100) {
-        throw new Error('Could not extract article content. Make sure this is a public Substack post.');
+        throw new Error('Could not extract article content. Make sure this is a public or shared Substack post.');
       }
 
-      const title = $('h1.post-title').text().trim() || $('h1').first().text().trim() || '';
       const finalContent = title ? `${title}\n\n${content}` : content;
 
       res.json({ content: finalContent });
@@ -195,9 +234,9 @@ function createSocialPrompt(text, platform, styleGuide) {
     : '';
 
   const platformInstructions = {
-    substack: 'Substack Notes: Can be longer (up to 500 chars), include context, can reference the article directly.',
-    twitter: 'Twitter/X: Maximum 280 characters. Punchy, engaging, can include hashtags sparingly.',
-    instagram: 'Instagram: Caption style, can be slightly longer, emoji-friendly, engaging hook.'
+    substack: 'Substack Notes: Can be longer (up to 500 chars), include context, can reference the article directly. NEVER use hashtags.',
+    twitter: 'Twitter/X: Maximum 280 characters. Punchy, engaging. NEVER use hashtags - they look desperate and reduce engagement.',
+    instagram: 'Instagram: Caption style, can be slightly longer, emoji-friendly, engaging hook. Minimal hashtags only if truly necessary.'
   };
 
   return `You are a social media manager for Persuasion, a magazine focused on defending liberal democracy.

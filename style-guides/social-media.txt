@@ -47,7 +47,7 @@ Social media copy for Persuasion should drive engagement while maintaining the p
 **What to avoid:**
 - Walls of text (even though length is allowed)
 - Passive academic framing
-- Excessive hashtags
+- **NO HASHTAGS** - Substack Notes should never include hashtags
 
 ---
 
@@ -75,7 +75,7 @@ Social media copy for Persuasion should drive engagement while maintaining the p
 **What to avoid:**
 - Thread-bait ("A thread on...")
 - Excessive emojis
-- Hashtag stuffing
+- **NO HASHTAGS** - they look desperate and reduce engagement
 - Vague teasers ("Interesting piece on politics")
 
 **Character count tips:**
