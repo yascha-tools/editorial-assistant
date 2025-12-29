@@ -62,8 +62,12 @@
           Copy-Edit
         </label>
         <label class="checkbox-label">
+          <input type="checkbox" id="task-flagclaims">
+          Flag Claims
+        </label>
+        <label class="checkbox-label">
           <input type="checkbox" id="task-factcheck">
-          Fact-Check
+          Fact-Check (Web)
         </label>
       </div>
 
@@ -105,17 +109,28 @@
       <!-- Copy-Edit Results -->
       <div id="copyedit-section" class="result-box hidden">
         <h2>Copy-Edit</h2>
-        <div id="copyedit-output" class="output-box"></div>
+        <div id="copyedit-output" class="output-box" tabindex="0"></div>
         <div id="copyedit-issues" class="issues-list hidden">
           <h3>Issues Found</h3>
           <ul id="copyedit-issues-list"></ul>
         </div>
       </div>
 
+      <!-- Flag Claims Results -->
+      <div id="flagclaims-section" class="result-box hidden">
+        <h2>Claims to Verify</h2>
+        <p class="section-note">These claims should be fact-checked before publication:</p>
+        <div id="flagclaims-output" class="output-box" tabindex="0"></div>
+        <div id="flagclaims-list-container" class="claims-list hidden">
+          <h3>Claims List</h3>
+          <ul id="flagclaims-list"></ul>
+        </div>
+      </div>
+
       <!-- Fact-Check Results -->
       <div id="factcheck-section" class="result-box hidden">
-        <h2>Fact-Check</h2>
-        <div id="factcheck-output" class="output-box"></div>
+        <h2>Fact-Check (Web Verified)</h2>
+        <div id="factcheck-output" class="output-box" tabindex="0"></div>
         <div id="factcheck-claims" class="claims-list hidden">
           <h3>Claims Reviewed</h3>
           <ul id="factcheck-claims-list"></ul>

@@ -257,6 +257,13 @@ button:disabled {
   margin-bottom: 0;
 }
 
+.section-note {
+  color: #666;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  font-style: italic;
+}
+
 /* Headlines */
 .headlines-list {
   display: flex;
@@ -371,6 +378,26 @@ button:disabled {
   line-height: 1.8;
   max-height: 500px;
   overflow-y: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+/* Make output boxes focusable for Cmd+A selection */
+.output-box:focus {
+  outline: 2px solid #1a365d;
+  outline-offset: 2px;
+}
+
+/* Source links in fact-check */
+.source-link {
+  color: #3b82f6;
+  text-decoration: none;
+  font-size: 0.85em;
+}
+
+.source-link:hover {
+  text-decoration: underline;
 }
 
 /* Copy-Edit Highlights */
@@ -407,6 +434,57 @@ button:disabled {
   border-bottom: 2px solid #6366f1;
   padding: 0 2px;
   cursor: help;
+}
+
+/* Flag Claims - category colors */
+.claim-to-verify {
+  padding: 0 2px;
+  cursor: help;
+}
+
+.claim-category-statistic {
+  background-color: #dbeafe;
+  border-bottom: 2px solid #3b82f6;
+}
+
+.claim-category-quote {
+  background-color: #f3e8ff;
+  border-bottom: 2px solid #a855f7;
+}
+
+.claim-category-historical {
+  background-color: #fef3c7;
+  border-bottom: 2px solid #f59e0b;
+}
+
+.claim-category-scientific {
+  background-color: #d1fae5;
+  border-bottom: 2px solid #10b981;
+}
+
+.claim-category-biographical {
+  background-color: #e0e7ff;
+  border-bottom: 2px solid #6366f1;
+}
+
+.claim-category-current {
+  background-color: #cffafe;
+  border-bottom: 2px solid #06b6d4;
+}
+
+.claim-category-legal {
+  background-color: #fce7f3;
+  border-bottom: 2px solid #ec4899;
+}
+
+.claim-category-policy {
+  background-color: #f5f5f4;
+  border-bottom: 2px solid #78716c;
+}
+
+.claim-category-sensitive {
+  background-color: #fee2e2;
+  border-bottom: 2px solid #ef4444;
 }
 
 /* Issues & Claims Lists */
@@ -457,6 +535,44 @@ button:disabled {
   border-left: 3px solid #6366f1;
 }
 
+.claim-item-to-verify {
+  background: #fef3c7;
+  border-left: 3px solid #f59e0b;
+}
+
+/* Category-specific list items */
+.claim-item-statistic { background: #dbeafe; border-left: 3px solid #3b82f6; }
+.claim-item-quote { background: #f3e8ff; border-left: 3px solid #a855f7; }
+.claim-item-historical { background: #fef3c7; border-left: 3px solid #f59e0b; }
+.claim-item-scientific { background: #d1fae5; border-left: 3px solid #10b981; }
+.claim-item-biographical { background: #e0e7ff; border-left: 3px solid #6366f1; }
+.claim-item-current { background: #cffafe; border-left: 3px solid #06b6d4; }
+.claim-item-legal { background: #fce7f3; border-left: 3px solid #ec4899; }
+.claim-item-policy { background: #f5f5f4; border-left: 3px solid #78716c; }
+.claim-item-sensitive { background: #fee2e2; border-left: 3px solid #ef4444; }
+
+.claim-category {
+  display: inline-block;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  margin-right: 0.5rem;
+  text-transform: uppercase;
+}
+
+/* Category badge colors */
+.claim-category-badge-statistic { background: #3b82f6; }
+.claim-category-badge-quote { background: #a855f7; }
+.claim-category-badge-historical { background: #f59e0b; }
+.claim-category-badge-scientific { background: #10b981; }
+.claim-category-badge-biographical { background: #6366f1; }
+.claim-category-badge-current { background: #06b6d4; }
+.claim-category-badge-legal { background: #ec4899; }
+.claim-category-badge-policy { background: #78716c; }
+.claim-category-badge-sensitive { background: #ef4444; }
+
 .claim-icon {
   font-weight: bold;
   margin-right: 0.5rem;
@@ -466,6 +582,75 @@ button:disabled {
 .claim-item-questionable .claim-icon { color: #ca8a04; }
 .claim-item-incorrect .claim-icon { color: #dc2626; }
 .claim-item-check-current .claim-icon { color: #6366f1; }
+
+/* Confirmation Modal */
+.confirm-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.confirm-modal {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.confirm-modal h3 {
+  margin: 0 0 0.75rem 0;
+  color: #1a365d;
+  font-size: 1.1rem;
+}
+
+.confirm-modal p {
+  margin: 0 0 1.5rem 0;
+  color: #666;
+  line-height: 1.5;
+}
+
+.confirm-modal-buttons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.confirm-btn-yes {
+  background: #1a365d;
+  color: white;
+  border: none;
+  padding: 0.6rem 1.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.confirm-btn-yes:hover {
+  background: #2c5282;
+}
+
+.confirm-btn-no {
+  background: #f0f0f0;
+  color: #333;
+  border: 1px solid #ddd;
+  padding: 0.6rem 1.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.confirm-btn-no:hover {
+  background: #e5e5e5;
+}
 
 /* Responsive */
 @media (max-width: 768px) {

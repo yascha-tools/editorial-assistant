@@ -106,6 +106,21 @@ app.post('/api/fetch-doc', async (req, res) => {
       let content = '';
       let title = '';
 
+      // Helper to extract text while preserving italics as markdown
+      function extractTextWithItalics($el, $) {
+        // Convert <em> and <i> tags to markdown italics
+        $el.find('em, i').each((idx, elem) => {
+          const $elem = $(elem);
+          const rawText = $elem.text();
+          const trimmed = rawText.trim();
+          // Preserve leading/trailing spaces outside the asterisks
+          const leadingSpace = rawText.match(/^\s+/) ? ' ' : '';
+          const trailingSpace = rawText.match(/\s+$/) ? ' ' : '';
+          $elem.replaceWith(`${leadingSpace}*${trimmed}*${trailingSpace}`);
+        });
+        return $el.text().trim();
+      }
+
       // First, try to extract from JSON preloads (works for drafts and some posts)
       const allScripts = $('script');
       allScripts.each((i, el) => {
@@ -130,10 +145,10 @@ app.post('/api/fetch-doc', async (req, res) => {
               const post = preloads.post || (preloads.posts && preloads.posts[0]);
               if (post && post.body_html) {
                 title = post.title || '';
-                // Parse HTML content
+                // Parse HTML content, preserving italics
                 const $body = cheerio.load(post.body_html);
                 content = $body('p, h1, h2, h3, h4, blockquote, li').map((idx, elem) => {
-                  return $body(elem).text().trim();
+                  return extractTextWithItalics($body(elem).clone(), $body);
                 }).get().filter(t => t.length > 0).join('\n\n');
               }
             } catch (e) {
@@ -152,7 +167,7 @@ app.post('/api/fetch-doc', async (req, res) => {
           if (element.length > 0) {
             element.find('button, .subscription-widget, .captioned-image-container figcaption').remove();
             content = element.find('p, h1, h2, h3, h4, blockquote, li').map((i, el) => {
-              return $(el).text().trim();
+              return extractTextWithItalics($(el).clone(), $);
             }).get().join('\n\n');
             if (content.length > 100) break;
           }
@@ -385,6 +400,103 @@ async function processCopyEditChunked(text, styleGuide, sendProgress) {
   return allMarkedText + '\n\n---ISSUES---\n' + allIssues.join('\n');
 }
 
+// Process flag claims in chunks for long articles
+async function processFlagClaimsChunked(text, sendProgress) {
+  const CHUNK_THRESHOLD = 5000;
+
+  if (text.length <= CHUNK_THRESHOLD) {
+    // Short article - process normally
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16384,
+      messages: [{ role: 'user', content: createFlagClaimsPrompt(text) }]
+    });
+    return response.content[0].text;
+  }
+
+  // Long article - split into chunks and process in parallel
+  const chunks = splitIntoChunks(text, 4000);
+  sendProgress('flagClaims', `Processing ${chunks.length} sections in parallel...`);
+
+  const batchResults = await Promise.all(
+    chunks.map((chunk, idx) =>
+      anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 8192,
+        messages: [{ role: 'user', content: createFlagClaimsPrompt(chunk) }]
+      }).then(r => r.content[0].text)
+    )
+  );
+
+  // Merge results
+  let allMarkedText = '';
+  let allClaims = [];
+  let claimCounter = 1;
+
+  for (const result of batchResults) {
+    const parts = result.split(/---CLAIMS---/i);
+    const markedText = parts[0].trim();
+    const claimsText = parts[1] || '';
+
+    allMarkedText += (allMarkedText ? '\n\n' : '') + markedText;
+
+    // Extract and renumber claims
+    const claimMatches = claimsText.matchAll(/\d+\.\s*(.+?)(?=\n\d+\.|$)/gs);
+    for (const match of claimMatches) {
+      allClaims.push(`${claimCounter}. ${match[1].trim()}`);
+      claimCounter++;
+    }
+  }
+
+  return allMarkedText + '\n\n---CLAIMS---\n' + allClaims.join('\n');
+}
+
+function createFlagClaimsPrompt(text) {
+  return `You are identifying claims that need fact-checking in an article for Persuasion magazine.
+
+Your job is to IDENTIFY claims that should be verified before publication - NOT to verify them yourself. Be AGGRESSIVE - it's better to flag too much than too little.
+
+Mark each claim that needs verification using:
+[[CLAIM: the claim text | category | why it needs verification]]
+
+Categories:
+- STATISTIC: Numbers, percentages, data points
+- QUOTE: Direct quotes or attributed statements
+- HISTORICAL: Historical events, dates, facts
+- SCIENTIFIC: Scientific claims, studies, research findings
+- BIOGRAPHICAL: Facts about specific people
+- CURRENT: Current events, recent developments, ongoing situations
+- LEGAL: Claims about laws, court decisions, legal processes
+- POLICY: Claims about what policies do or have done
+- SENSITIVE: Potentially defamatory claims, personal allegations, claims that could lead to lawsuits - FLAG THESE LIBERALLY
+
+FLAG AGGRESSIVELY - include:
+- Strong allegations about individuals or institutions
+- Claims about someone's motives or intentions
+- Accusations of wrongdoing, corruption, or illegal activity
+- Claims about due process violations or civil rights abuses
+- Assertions about what agencies or officials have done
+- Claims about impacts or consequences of policies
+- Characterizations of someone's behavior (e.g., "turned X into an instrument of revenge")
+- Claims that could be seen as defamatory if inaccurate
+- Any claim a lawyer might flag before publication
+
+Do NOT flag:
+- Pure opinion clearly framed as opinion ("I believe...", "In my view...")
+- Obvious hyperbole or rhetorical flourishes
+- Questions posed by the author
+
+IMPORTANT: When in doubt, FLAG IT. The goal is to catch everything that could cause problems if wrong.
+
+Output the COMPLETE article with claims marked.
+After the article, add "---CLAIMS---" followed by a numbered list:
+1. "claim text" (CATEGORY) - What to verify
+2. "claim text" (CATEGORY) - What to verify
+
+Article to review:
+${text}`;
+}
+
 function createFactCheckPrompt(text, styleGuide) {
   const guideSection = styleGuide?.trim()
     ? `\n\nFact-Checking Guidelines:\n${styleGuide}\n\n---\n\n`
@@ -393,9 +505,11 @@ function createFactCheckPrompt(text, styleGuide) {
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   return `You are a fact-checker for Persuasion magazine.
-Today's date is ${today} (or possibly later - this article was written recently).
+Today's date is ${today} (or possibly later when you process this - the article is CURRENT).
 ${guideSection}
-Review this article and verify factual claims. For each significant claim:
+Review this article and verify factual claims. Be COMPREHENSIVE - mark ALL significant claims.
+
+For each claim:
 
 1. If VERIFIED (you're confident it's accurate based on established facts):
    [[VERIFIED: the claim text]]
@@ -406,32 +520,363 @@ Review this article and verify factual claims. For each significant claim:
 3. If INCORRECT (demonstrably wrong based on established facts):
    [[INCORRECT: the claim text | the correction with accurate information]]
 
-4. If TIME-SENSITIVE (requires current data you don't have - recent statistics, current officeholders, ongoing events, recent developments):
+4. If TIME-SENSITIVE (requires current data you don't have):
    [[CHECK_CURRENT: the claim text | what specifically needs to be verified with current sources]]
 
-IMPORTANT GUIDELINES:
-- Today is ${today}. Do NOT flag dates as incorrect just because they refer to recent events.
-- Do NOT question whether recent events happened - assume the author has current knowledge.
-- Only mark CHECK_CURRENT for claims that genuinely need verification (statistics, exact quotes, etc.)
-- Do NOT flag every date or timeline mentioned - only flag if something is clearly historically wrong.
-
-Focus on:
-- Statistics and numbers that can be verified
-- Historical facts (not recent events)
+Be AGGRESSIVE - mark claims about:
+- Statistics, numbers, and percentages
+- Historical facts and dates
 - Quotes and attributions
-- Scientific claims
-- Named events or policies
+- Scientific and research claims
+- Named events, policies, or legislation
+- What officials or agencies have done
+- Allegations of wrongdoing or illegal activity
+- Policy impacts and consequences
+- Any claim that could be defamatory if wrong
 
-Output the COMPLETE article with claims marked. Not every sentence needs marking - only factual claims that can be verified.
+CRITICAL DATE GUIDANCE:
+- Today is ${today}. The article is CURRENT - written recently.
+- Do NOT flag claims as incorrect or questionable just because they mention recent events.
+- Do NOT question whether recent events happened - assume the author has current knowledge.
+- Do NOT flag timeline issues for events in 2025 or late 2024.
+- Only use CHECK_CURRENT for claims where you genuinely cannot verify the current state.
+
+Output the COMPLETE article with claims marked.
 After the article, do not add any additional commentary.
 
 Article to fact-check:
 ${text}`;
 }
 
+// Tavily web search helper
+async function searchWithTavily(query) {
+  const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+  if (!TAVILY_API_KEY) {
+    return null;
+  }
+
+  try {
+    const response = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        api_key: TAVILY_API_KEY,
+        query: query,
+        search_depth: 'basic', // Use basic for cost efficiency
+        max_results: 3
+      })
+    });
+
+    if (!response.ok) {
+      console.error('Tavily search failed:', response.status);
+      return null;
+    }
+
+    const data = await response.json();
+    return data.results || [];
+  } catch (e) {
+    console.error('Tavily search error:', e.message);
+    return null;
+  }
+}
+
+// Extract claims for fact-checking - chunked for long articles
+async function extractClaimsForFactCheck(text, today, sendProgress) {
+  const CHUNK_THRESHOLD = 5000;
+
+  const extractPrompt = (articleText) => `Today's date is ${today} (or possibly later when you process this).
+
+Extract ALL factual claims from this article that should be verified. Be AGGRESSIVE - it's better to extract too many than too few.
+
+For each claim, provide:
+1. The exact claim text (short - just the core claim)
+2. A search query to verify it (be specific)
+
+Format as JSON:
+{
+  "claims": [
+    { "claim": "exact claim from article", "searchQuery": "specific search query" }
+  ]
+}
+
+FLAG AGGRESSIVELY - include:
+- Statistics, numbers, percentages
+- Quotes and attributed statements
+- Named policies, legislation, or executive actions
+- Claims about what officials or agencies have done
+- Allegations of wrongdoing, corruption, or illegal activity
+- Claims about someone's motives or intentions
+- Claims about due process violations or civil rights abuses
+- Policy impacts and consequences
+- Characterizations of someone's behavior (e.g., "turned X into an instrument of revenge")
+- Claims that could be seen as defamatory if inaccurate
+- Any claim a lawyer might flag before publication
+- Claims about institutional actions
+- Historical facts and dates
+- Scientific or research claims
+
+DO NOT extract:
+- Pure opinions clearly framed as opinion ("I believe...", "In my view...")
+- Obvious hyperbole or rhetorical flourishes
+- Questions posed by the author
+
+IMPORTANT: When in doubt, EXTRACT IT. Extract as many claims as the article warrants - could be 20, could be 60+.
+
+Article:
+${articleText}`;
+
+  if (text.length <= CHUNK_THRESHOLD) {
+    // Short article - single extraction
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: extractPrompt(text) }]
+    });
+
+    const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
+    const data = JSON.parse(jsonMatch[0]);
+    return data.claims || [];
+  }
+
+  // Long article - chunk and extract in parallel
+  const chunks = splitIntoChunks(text, 4000);
+  sendProgress('factCheck', `Identifying claims across ${chunks.length} sections...`);
+
+  const chunkResults = await Promise.all(
+    chunks.map(async (chunk) => {
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        messages: [{ role: 'user', content: extractPrompt(chunk) }]
+      });
+
+      try {
+        const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
+        const data = JSON.parse(jsonMatch[0]);
+        return data.claims || [];
+      } catch (e) {
+        return [];
+      }
+    })
+  );
+
+  // Merge and deduplicate claims more robustly
+  const allClaims = chunkResults.flat();
+  const uniqueClaims = [];
+  const seenClaims = [];
+
+  for (const claim of allClaims) {
+    // Normalize: lowercase, remove extra spaces, take key words
+    const normalized = claim.claim.toLowerCase()
+      .replace(/[^\w\s]/g, '') // remove punctuation
+      .replace(/\s+/g, ' ')    // normalize spaces
+      .trim();
+
+    // Check if we've seen a similar claim (>60% overlap in words)
+    const words = normalized.split(' ').filter(w => w.length > 3);
+    const isDuplicate = seenClaims.some(seen => {
+      const seenWords = seen.split(' ').filter(w => w.length > 3);
+      const overlap = words.filter(w => seenWords.includes(w)).length;
+      const similarity = overlap / Math.max(words.length, seenWords.length);
+      return similarity > 0.6;
+    });
+
+    if (!isDuplicate) {
+      seenClaims.push(normalized);
+      uniqueClaims.push(claim);
+    }
+  }
+
+  return uniqueClaims;
+}
+
+// Process fact-checking with web search
+async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfirmRequired, confirmedClaimCount = false) {
+  const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  // If no Tavily key, fall back to regular fact-check
+  if (!TAVILY_API_KEY) {
+    sendProgress('factCheck', 'No web search API configured - using AI knowledge only...');
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16384,
+      messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
+    });
+    return response.content[0].text;
+  }
+
+  // Step 1: Extract claims to verify (using chunked extraction for long articles)
+  sendProgress('factCheck', 'Identifying claims to verify...');
+
+  let claims = [];
+  try {
+    claims = await extractClaimsForFactCheck(text, today, sendProgress);
+  } catch (e) {
+    console.error('Failed to extract claims:', e.message);
+    // Fall back to regular fact-check
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16384,
+      messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
+    });
+    return response.content[0].text;
+  }
+
+  if (claims.length === 0) {
+    // No claims found, fall back to regular fact-check
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 16384,
+      messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
+    });
+    return response.content[0].text;
+  }
+
+  // Step 2: Check claim count and request confirmation if needed
+  const claimCount = claims.length;
+
+  if (claimCount > 25 && !confirmedClaimCount) {
+    // Request user confirmation before proceeding
+    sendConfirmRequired(claimCount);
+    return null; // Signal that confirmation is needed
+  }
+
+  sendProgress('factCheck', `Searching web for ${claimCount} claims...`);
+
+  // Batch Tavily searches - run 10 at a time for speed
+  const searchResults = [];
+  const SEARCH_BATCH_SIZE = 10;
+
+  for (let i = 0; i < claims.length; i += SEARCH_BATCH_SIZE) {
+    const batch = claims.slice(i, i + SEARCH_BATCH_SIZE);
+
+    sendProgress('factCheck', `Searching claims ${i + 1}-${Math.min(i + SEARCH_BATCH_SIZE, claimCount)} of ${claimCount}...`);
+
+    const batchResults = await Promise.all(
+      batch.map(async (claim) => {
+        const results = await searchWithTavily(claim.searchQuery);
+        return {
+          claim: claim.claim,
+          query: claim.searchQuery,
+          results: results || []
+        };
+      })
+    );
+
+    searchResults.push(...batchResults);
+  }
+
+  // Step 3: Have Claude verify with search results
+  // For large articles, chunk and analyze in parallel
+  const ANALYSIS_CHUNK_THRESHOLD = 4000;
+
+  if (text.length > ANALYSIS_CHUNK_THRESHOLD && searchResults.length > 10) {
+    sendProgress('factCheck', `Analyzing ${searchResults.length} claims in parallel...`);
+
+    // Split article into chunks
+    const chunks = splitIntoChunks(text, 3000);
+    const chunkCount = chunks.length;
+
+    // For each chunk, find relevant search results + include some extras
+    const chunkResults = await Promise.all(
+      chunks.map(async (chunk, idx) => {
+        // Find claims that appear in this chunk
+        const chunkLower = chunk.toLowerCase();
+        const relevantResults = searchResults.filter(sr => {
+          const claimWords = sr.claim.toLowerCase().split(' ').filter(w => w.length > 4);
+          // Check if at least 2 significant words from the claim appear in the chunk
+          const matchCount = claimWords.filter(w => chunkLower.includes(w)).length;
+          return matchCount >= 2 || chunkLower.includes(sr.claim.toLowerCase().substring(0, 30));
+        });
+
+        // Use relevant results, or if too few, use all (but cap at 40 to avoid huge prompts)
+        let resultsToUse = relevantResults.length >= 3 ? relevantResults : searchResults;
+        if (resultsToUse.length > 40) {
+          resultsToUse = resultsToUse.slice(0, 40);
+        }
+
+        try {
+          const chunkPrompt = createVerifyPrompt(chunk, resultsToUse, today, idx + 1, chunkCount);
+
+          const response = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 8192,
+            messages: [{ role: 'user', content: chunkPrompt }]
+          });
+
+          return response.content[0].text;
+        } catch (e) {
+          console.error(`Error analyzing chunk ${idx + 1}:`, e.message);
+          return chunk; // Return unmarked chunk on error
+        }
+      })
+    );
+
+    // Merge chunk results
+    return chunkResults.join('\n\n');
+  }
+
+  // For smaller articles, analyze in one go
+  sendProgress('factCheck', 'Analyzing search results...');
+  const verifyPrompt = createVerifyPrompt(text, searchResults, today);
+
+  const verifyResponse = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 16384,
+    messages: [{ role: 'user', content: verifyPrompt }]
+  });
+
+  return verifyResponse.content[0].text;
+}
+
+// Helper to create verification prompt
+function createVerifyPrompt(text, searchResults, today, chunkNum = null, totalChunks = null) {
+  const chunkNote = chunkNum ? `\n\nThis is section ${chunkNum} of ${totalChunks} of the article.` : '';
+
+  return `You are a fact-checker for Persuasion magazine. Today's date is ${today} (or possibly later).
+
+I've ALREADY searched the web for claims in this article. You MUST use these search results to verify claims - do not say "needs verification" if I've provided search results!
+
+SEARCH RESULTS FROM WEB:
+${searchResults.map((sr, i) => `
+CLAIM ${i + 1}: "${sr.claim}"
+Search query: ${sr.query}
+Results:
+${sr.results.length > 0
+    ? sr.results.map(r => `- ${r.title}: ${r.content?.substring(0, 300) || 'No content'}... [SOURCE: ${r.url}]`).join('\n')
+    : 'No results found'}
+`).join('\n')}
+
+Now review the article and mark claims using the search results above.
+
+CRITICAL INSTRUCTIONS:
+- If search results SUPPORT a claim → mark as VERIFIED with the source
+- If search results CONTRADICT a claim → mark as INCORRECT with correction and source
+- If search results are MIXED or UNCLEAR → mark as QUESTIONABLE with explanation and source
+- ONLY use CHECK_CURRENT if NO search results were found for that specific claim
+
+Format:
+1. [[VERIFIED: claim | what confirms it | source URL]] - USE THIS when search results support the claim
+2. [[QUESTIONABLE: claim | concern | source URL]] - USE THIS when results are mixed/unclear
+3. [[INCORRECT: claim | correction | source URL]] - USE THIS when results contradict
+4. [[CHECK_CURRENT: claim | note]] - ONLY use if we have NO search results for this claim
+
+IMPORTANT: I searched the web for these claims. If there are search results above, USE THEM to verify. Do not mark something as CHECK_CURRENT if I provided search results for it - instead mark it VERIFIED, QUESTIONABLE, or INCORRECT based on what the results say.
+
+For claims not in the search results above, you can still mark them based on established facts you know.
+${chunkNote}
+Output the article text with claims marked.
+
+Article:
+${text}`;
+}
+
 // SSE endpoint for processing
 app.post('/api/process-stream', async (req, res) => {
-  const { text, tasks, styleGuides = {} } = req.body;
+  const { text, tasks, styleGuides = {}, factCheckConfirmed = false } = req.body;
 
   if (!text || text.trim() === '') {
     return res.status(400).json({ error: 'Article text is required' });
@@ -461,6 +906,10 @@ app.post('/api/process-stream', async (req, res) => {
   const sendDone = () => {
     res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
     res.end();
+  };
+
+  const sendConfirmRequired = (claimCount) => {
+    res.write(`data: ${JSON.stringify({ type: 'confirm_required', task: 'factCheck', claimCount })}\n\n`);
   };
 
   try {
@@ -521,17 +970,39 @@ app.post('/api/process-stream', async (req, res) => {
       );
     }
 
-    // Fact-Check
-    if (tasks.factCheck) {
-      sendProgress('factCheck', 'Fact-checking article claims...');
+    // Flag Claims (identify without verifying) - with chunking for long articles
+    if (tasks.flagClaims) {
+      sendProgress('flagClaims', 'Identifying claims to verify...');
       promises.push(
-        anthropic.messages.create({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 16384,
-          messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuides.factCheck) }]
-        }).then(response => {
-          sendResult('factCheck', { text: response.content[0].text });
-        }).catch(e => sendError('factCheck', e.message))
+        processFlagClaimsChunked(text, sendProgress)
+          .then(result => {
+            sendResult('flagClaims', { text: result });
+          })
+          .catch(e => sendError('flagClaims', e.message))
+      );
+    }
+
+    // Fact-Check (with web search)
+    if (tasks.factCheck) {
+      sendProgress('factCheck', 'Fact-checking article claims with web search...');
+      promises.push(
+        processFactCheckWithWeb(text, styleGuides.factCheck, sendProgress, sendConfirmRequired, factCheckConfirmed)
+          .then(result => {
+            if (result === null) {
+              // Confirmation was requested - don't send result yet
+              return;
+            }
+            if (!result || result.length === 0) {
+              sendError('factCheck', 'No results returned from analysis');
+              return;
+            }
+            console.log(`Fact-check complete: ${result.length} chars`);
+            sendResult('factCheck', { text: result });
+          })
+          .catch(e => {
+            console.error('Fact-check error:', e);
+            sendError('factCheck', e.message || 'Unknown error during fact-check');
+          })
       );
     }
 

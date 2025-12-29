@@ -1,3 +1,18 @@
+// Handle Cmd+A / Ctrl+A in output boxes to select just that box's content
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+    const activeEl = document.activeElement;
+    if (activeEl && activeEl.classList.contains('output-box')) {
+      e.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(activeEl);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+});
+
 // DOM elements
 const toggleStyleGuidesBtn = document.getElementById('toggle-style-guides');
 const styleGuidesPanel = document.getElementById('style-guides-panel');
@@ -14,6 +29,7 @@ const articleText = document.getElementById('article-text');
 const taskHeadlines = document.getElementById('task-headlines');
 const taskSocial = document.getElementById('task-social');
 const taskCopyedit = document.getElementById('task-copyedit');
+const taskFlagclaims = document.getElementById('task-flagclaims');
 const taskFactcheck = document.getElementById('task-factcheck');
 
 const processBtn = document.getElementById('process-btn');
@@ -35,6 +51,11 @@ const copyeditSection = document.getElementById('copyedit-section');
 const copyeditOutput = document.getElementById('copyedit-output');
 const copyeditIssues = document.getElementById('copyedit-issues');
 const copyeditIssuesList = document.getElementById('copyedit-issues-list');
+
+const flagclaimsSection = document.getElementById('flagclaims-section');
+const flagclaimsOutput = document.getElementById('flagclaims-output');
+const flagclaimsListContainer = document.getElementById('flagclaims-list-container');
+const flagclaimsList = document.getElementById('flagclaims-list');
 
 const factcheckSection = document.getElementById('factcheck-section');
 const factcheckOutput = document.getElementById('factcheck-output');
@@ -154,6 +175,7 @@ processBtn.addEventListener('click', async () => {
     headlines: taskHeadlines.checked,
     social: taskSocial.checked,
     copyEdit: taskCopyedit.checked,
+    flagClaims: taskFlagclaims.checked,
     factCheck: taskFactcheck.checked
   };
 
@@ -177,7 +199,7 @@ processBtn.addEventListener('click', async () => {
     const response = await fetch('/api/process-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, tasks, styleGuides })
+      body: JSON.stringify({ text, tasks, styleGuides, factCheckConfirmed: false })
     });
 
     const reader = response.body.getReader();
@@ -215,7 +237,113 @@ function handleSSEMessage(data) {
     handleResult(data.task, data.data);
   } else if (data.type === 'error') {
     console.error(`Error in ${data.task}:`, data.error);
+  } else if (data.type === 'confirm_required') {
+    // Handle confirmation request for large claim counts
+    handleConfirmRequired(data);
   }
+}
+
+// Handle confirmation request for fact-checking many claims
+function handleConfirmRequired(data) {
+  if (data.task === 'factCheck') {
+    // Show custom Yes/No modal
+    showConfirmModal(
+      `Found ${data.claimCount} claims to fact-check`,
+      'This may take a while and use more API credits. Do you want to proceed?',
+      async () => {
+        // User clicked Yes - proceed with fact-check
+        setLoading(true);
+        loadingText.textContent = 'Proceeding with fact-check...';
+        resultsSection.classList.remove('hidden');
+
+        const text = articleText.value.trim();
+        const styleGuides = {
+          headlines: headlinesGuide.value,
+          socialMedia: socialGuide.value,
+          copyEdit: copyeditGuide.value,
+          factCheck: factcheckGuide.value
+        };
+
+        try {
+          const response = await fetch('/api/process-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text,
+              tasks: { factCheck: true },
+              styleGuides,
+              factCheckConfirmed: true
+            })
+          });
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const msgData = JSON.parse(line.slice(6));
+                handleSSEMessage(msgData);
+              }
+            }
+          }
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      },
+      () => {
+        // User clicked No - cancel and clear fact-check section
+        factcheckSection.classList.add('hidden');
+        factcheckOutput.innerHTML = '';
+        factcheckClaimsList.innerHTML = '';
+        factcheckClaims.classList.add('hidden');
+        setLoading(false);
+      }
+    );
+  }
+}
+
+// Custom confirmation modal with Yes/No buttons
+function showConfirmModal(title, message, onYes, onNo) {
+  // Remove any existing modal
+  const existingModal = document.getElementById('confirm-modal');
+  if (existingModal) existingModal.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'confirm-modal';
+  modal.className = 'confirm-modal-overlay';
+  modal.innerHTML = `
+    <div class="confirm-modal">
+      <h3>${title}</h3>
+      <p>${message}</p>
+      <div class="confirm-modal-buttons">
+        <button class="confirm-btn-no">No</button>
+        <button class="confirm-btn-yes">Yes</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  modal.querySelector('.confirm-btn-yes').addEventListener('click', () => {
+    modal.remove();
+    onYes();
+  });
+
+  modal.querySelector('.confirm-btn-no').addEventListener('click', () => {
+    modal.remove();
+    onNo();
+  });
 }
 
 function handleResult(task, data) {
@@ -231,6 +359,9 @@ function handleResult(task, data) {
   } else if (task === 'copyEdit') {
     copyeditSection.classList.remove('hidden');
     renderCopyEdit(data.text);
+  } else if (task === 'flagClaims') {
+    flagclaimsSection.classList.remove('hidden');
+    renderFlagClaims(data.text);
   } else if (task === 'factCheck') {
     factcheckSection.classList.remove('hidden');
     renderFactCheck(data.text);
@@ -394,39 +525,138 @@ function renderCopyEdit(text) {
   }
 }
 
+// Parse and render flag claims results
+function renderFlagClaims(text) {
+  const claims = [];
+
+  // Split article from claims list
+  const parts = text.split(/---CLAIMS---/i);
+  const articleText = parts[0].trim();
+  const claimsText = parts[1] || '';
+
+  // Helper to get CSS class suffix from category
+  function getCategoryClass(category) {
+    const cat = category.trim().toLowerCase();
+    const validCategories = ['statistic', 'quote', 'historical', 'scientific', 'biographical', 'current', 'legal', 'policy', 'sensitive'];
+    return validCategories.includes(cat) ? cat : 'historical'; // default fallback
+  }
+
+  // Parse [[CLAIM: text | category | reason]] markers
+  const claimRegex = /\[\[CLAIM:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\]\]/g;
+
+  let html = articleText.replace(claimRegex, (match, claim, category, reason) => {
+    const catClass = getCategoryClass(category);
+    claims.push({ claim, category: category.trim(), reason, catClass });
+    return `<span class="claim-to-verify claim-category-${catClass}" title="${escapeHtml(category)}: ${escapeHtml(reason)}">${escapeHtml(claim)}</span>`;
+  });
+
+  flagclaimsOutput.innerHTML = html.replace(/\n/g, '<br>');
+
+  // Parse the claims list
+  if (claimsText.trim()) {
+    const listRegex = /(\d+)\.\s*"([^"]+)"\s*\(([^)]+)\)\s*[-–—]\s*(.+?)(?=\n\d+\.|$)/gs;
+    const parsedClaims = [];
+    let match;
+    while ((match = listRegex.exec(claimsText)) !== null) {
+      const catClass = getCategoryClass(match[3]);
+      parsedClaims.push({
+        index: match[1],
+        claim: match[2],
+        category: match[3].trim(),
+        verify: match[4].trim(),
+        catClass
+      });
+    }
+
+    if (parsedClaims.length > 0) {
+      flagclaimsList.innerHTML = parsedClaims.map(c =>
+        `<li class="claim-item-${c.catClass}"><span class="claim-category claim-category-badge-${c.catClass}">${escapeHtml(c.category)}</span> "${escapeHtml(c.claim)}" — ${escapeHtml(c.verify)}</li>`
+      ).join('');
+      flagclaimsListContainer.classList.remove('hidden');
+    } else if (claims.length > 0) {
+      // Fallback: use inline claims
+      flagclaimsList.innerHTML = claims.map(c =>
+        `<li class="claim-item-${c.catClass}"><span class="claim-category claim-category-badge-${c.catClass}">${escapeHtml(c.category)}</span> "${escapeHtml(c.claim)}" — ${escapeHtml(c.reason)}</li>`
+      ).join('');
+      flagclaimsListContainer.classList.remove('hidden');
+    } else {
+      flagclaimsListContainer.classList.add('hidden');
+    }
+  } else {
+    flagclaimsListContainer.classList.add('hidden');
+  }
+}
+
 // Parse and render fact-check results
 function renderFactCheck(text) {
   const claims = [];
 
-  // Parse different claim types
-  const verifiedRegex = /\[\[VERIFIED:\s*(.+?)\]\]/g;
-  const questionableRegex = /\[\[QUESTIONABLE:\s*(.+?)\s*\|\s*(.+?)\]\]/g;
-  const incorrectRegex = /\[\[INCORRECT:\s*(.+?)\s*\|\s*(.+?)\]\]/g;
-  const checkCurrentRegex = /\[\[CHECK_CURRENT:\s*(.+?)\s*\|\s*(.+?)\]\]/g;
+  // Helper to extract URL from text
+  function extractUrl(text) {
+    const urlMatch = text.match(/https?:\/\/[^\s\]]+/);
+    return urlMatch ? urlMatch[0] : null;
+  }
+
+  // Helper to format detail with link
+  function formatDetailWithLink(detail, url) {
+    if (!detail) return '';
+    // Remove URL from detail text if it's at the end
+    let cleanDetail = detail.replace(/\s*https?:\/\/[^\s]+\s*$/, '').trim();
+    if (url) {
+      return ` — ${escapeHtml(cleanDetail)} <a href="${escapeHtml(url)}" target="_blank" class="source-link">[source]</a>`;
+    }
+    return ` — ${escapeHtml(cleanDetail)}`;
+  }
+
+  // Parse different claim types - now with 3 parts: claim | detail | url
+  const verifiedRegex = /\[\[VERIFIED:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\]\]/g;
+  const verifiedSimpleRegex = /\[\[VERIFIED:\s*(.+?)\s*\|\s*(.+?)\]\]/g;
+  const verifiedBasicRegex = /\[\[VERIFIED:\s*(.+?)\]\]/g;
+  const questionableRegex = /\[\[QUESTIONABLE:\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?\]\]/g;
+  const incorrectRegex = /\[\[INCORRECT:\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?\]\]/g;
+  const checkCurrentRegex = /\[\[CHECK_CURRENT:\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?\]\]/g;
 
   let html = text;
 
-  // Replace verified claims
-  html = html.replace(verifiedRegex, (match, claim) => {
-    claims.push({ type: 'verified', claim, detail: null });
+  // Replace verified claims (with evidence and URL)
+  html = html.replace(verifiedRegex, (match, claim, evidence, url) => {
+    const cleanUrl = extractUrl(url) || extractUrl(evidence);
+    claims.push({ type: 'verified', claim, detail: evidence, url: cleanUrl });
+    const title = evidence ? `${evidence}` : 'Verified';
+    return `<span class="claim-verified" title="${escapeHtml(title)}">${escapeHtml(claim)}</span>`;
+  });
+
+  // Replace verified claims (with evidence, no URL)
+  html = html.replace(verifiedSimpleRegex, (match, claim, evidence) => {
+    const url = extractUrl(evidence);
+    claims.push({ type: 'verified', claim, detail: evidence, url });
+    return `<span class="claim-verified" title="${escapeHtml(evidence)}">${escapeHtml(claim)}</span>`;
+  });
+
+  // Replace verified claims (basic - no evidence)
+  html = html.replace(verifiedBasicRegex, (match, claim) => {
+    claims.push({ type: 'verified', claim, detail: null, url: null });
     return `<span class="claim-verified">${escapeHtml(claim)}</span>`;
   });
 
   // Replace questionable claims
-  html = html.replace(questionableRegex, (match, claim, concern) => {
-    claims.push({ type: 'questionable', claim, detail: concern });
+  html = html.replace(questionableRegex, (match, claim, concern, url) => {
+    const cleanUrl = url ? extractUrl(url) : extractUrl(concern);
+    claims.push({ type: 'questionable', claim, detail: concern, url: cleanUrl });
     return `<span class="claim-questionable" title="${escapeHtml(concern)}">${escapeHtml(claim)}</span>`;
   });
 
   // Replace incorrect claims
-  html = html.replace(incorrectRegex, (match, claim, correction) => {
-    claims.push({ type: 'incorrect', claim, detail: correction });
+  html = html.replace(incorrectRegex, (match, claim, correction, url) => {
+    const cleanUrl = url ? extractUrl(url) : extractUrl(correction);
+    claims.push({ type: 'incorrect', claim, detail: correction, url: cleanUrl });
     return `<span class="claim-incorrect" title="${escapeHtml(correction)}">${escapeHtml(claim)}</span>`;
   });
 
-  // Replace check-current claims (time-sensitive, need verification)
-  html = html.replace(checkCurrentRegex, (match, claim, whatToCheck) => {
-    claims.push({ type: 'check-current', claim, detail: whatToCheck });
+  // Replace check-current claims
+  html = html.replace(checkCurrentRegex, (match, claim, whatToCheck, url) => {
+    const cleanUrl = url ? extractUrl(url) : extractUrl(whatToCheck);
+    claims.push({ type: 'check-current', claim, detail: whatToCheck, url: cleanUrl });
     return `<span class="claim-check-current" title="${escapeHtml(whatToCheck)}">${escapeHtml(claim)}</span>`;
   });
 
@@ -434,9 +664,9 @@ function renderFactCheck(text) {
 
   if (claims.length > 0) {
     factcheckClaimsList.innerHTML = claims.map(c => {
-      const detail = c.detail ? ` — ${escapeHtml(c.detail)}` : '';
       const icon = c.type === 'verified' ? '✓' : c.type === 'questionable' ? '?' : c.type === 'incorrect' ? '✗' : '⏱';
-      return `<li class="claim-item-${c.type}"><span class="claim-icon">${icon}</span> ${escapeHtml(c.claim)}${detail}</li>`;
+      const detailHtml = formatDetailWithLink(c.detail, c.url);
+      return `<li class="claim-item-${c.type}"><span class="claim-icon">${icon}</span> ${escapeHtml(c.claim)}${detailHtml}</li>`;
     }).join('');
     factcheckClaims.classList.remove('hidden');
   } else {
@@ -462,6 +692,7 @@ function clearResults() {
   headlinesSection.classList.add('hidden');
   socialSection.classList.add('hidden');
   copyeditSection.classList.add('hidden');
+  flagclaimsSection.classList.add('hidden');
   factcheckSection.classList.add('hidden');
   headlinesList.innerHTML = '';
   socialData = { substack: [], twitter: [], instagram: [] };
@@ -469,6 +700,9 @@ function clearResults() {
   copyeditOutput.innerHTML = '';
   copyeditIssuesList.innerHTML = '';
   copyeditIssues.classList.add('hidden');
+  flagclaimsOutput.innerHTML = '';
+  flagclaimsList.innerHTML = '';
+  flagclaimsListContainer.classList.add('hidden');
   factcheckOutput.innerHTML = '';
   factcheckClaimsList.innerHTML = '';
   factcheckClaims.classList.add('hidden');
