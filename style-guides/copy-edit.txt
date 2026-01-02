@@ -71,10 +71,35 @@ Persuasion publishes intellectually serious essays on politics, culture, and soc
 
 ---
 
+## MULTILINGUAL ARTICLES
+
+Persuasion occasionally publishes articles in languages other than English (e.g., German, French, Spanish). When copy-editing non-English articles:
+
+- Apply the spirit of this style guide to the target language
+- Do NOT repeatedly flag that the article is in a different language—this is intentional
+- Focus on grammar, punctuation, and clarity issues within that language
+- Flag factual concerns, logical issues, and sensitivity concerns as you would for English articles
+- Maintain the same intellectual rigor and voice-preservation principles
+- For punctuation conventions that differ by language (e.g., French spacing around punctuation, German quotation marks), follow the conventions of the article's language
+
+---
+
+## DATE HANDLING
+
+**IMPORTANT**: This style guide was composed in January 2026. The copy-edit check may be run at any point in 2026 or later.
+
+- Do NOT flag dates in 2025 or 2026 as incorrect or "in the future"
+- Do NOT assume the current date is in 2024—the AI model's training cutoff does not reflect the actual date
+- When articles reference recent events (2025, 2026), treat these as contemporary, not future-dated
+- Only flag dates that are genuinely implausible or contain obvious errors (e.g., "February 30" or historical events with wrong years)
+
+---
+
 ## COMMON ISSUES TO FLAG
 
 ### Factual Concerns
-- Dates, statistics, or figures that seem off
+- Statistics or figures that seem off
+- Dates that are genuinely implausible (but see DATE HANDLING section—do not flag 2025/2026 dates as "future")
 - Quotations that may be paraphrased rather than exact
 - Claims about what someone said or did without citation
 - Historical claims that may be contested
