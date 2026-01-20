@@ -442,75 +442,126 @@ function renderCopyEdit(text) {
   const articleText = parts[0].trim();
   const issuesText = parts[1] || '';
 
-  // Parse [[ISSUE: text]] markers in article
-  // Track unique issues so repeated text gets the same number
+  // FIRST: Parse the issues list to build lookup maps
+  const issues = [];
+  let match;
+
+  // Split issues text into individual lines for processing
+  const issueLines = issuesText.trim().split('\n').filter(l => l.trim());
+
+  // Process each line that starts with a number
+  let currentIssue = null;
+  for (const line of issueLines) {
+    const lineMatch = line.match(/^(\d+)\.\s*(.+)/);
+    if (lineMatch) {
+      // Save previous issue if exists
+      if (currentIssue) {
+        issues.push(currentIssue);
+      }
+
+      const num = lineMatch[1];
+      const content = lineMatch[2];
+
+      // Try to parse structured format: "original" → "fix" (CATEGORY: reason)
+      const structuredMatch = content.match(/["„»]([^""„"«»]+)["„"«»]\s*(?:->|→)\s*["„»]([^""„"«»]+)["„"«»]\s*\(([^)]+)\)/);
+      if (structuredMatch) {
+        currentIssue = {
+          index: num,
+          original: structuredMatch[1],
+          fix: structuredMatch[2],
+          reason: structuredMatch[3]
+        };
+      } else {
+        // Try simpler format: "original" → "fix" — reason
+        const simpleMatch = content.match(/["„»]([^""„"«»]+)["„"«»]\s*(?:->|→)\s*["„»]([^""„"«»]+)["„"«»]\s*[—\-–]\s*(.+)/);
+        if (simpleMatch) {
+          currentIssue = {
+            index: num,
+            original: simpleMatch[1],
+            fix: simpleMatch[2],
+            reason: simpleMatch[3].trim()
+          };
+        } else {
+          // Fallback: just store the whole line as reason
+          currentIssue = {
+            index: num,
+            original: '',
+            fix: '',
+            reason: content.trim()
+          };
+        }
+      }
+    } else if (currentIssue && line.trim()) {
+      // Continuation of previous issue (multi-line reason)
+      currentIssue.reason += ' ' + line.trim();
+    }
+  }
+  // Don't forget the last issue
+  if (currentIssue) {
+    issues.push(currentIssue);
+  }
+
+  // Build TWO lookup maps for matching
+  const issueByNum = new Map();
+  const issueByContent = new Map();
+
+  issues.forEach(issue => {
+    let tooltip;
+    if (issue.original && issue.fix) {
+      tooltip = `"${issue.original}" → "${issue.fix}"\n${issue.reason}`;
+      const contentKey = issue.original.trim().toLowerCase();
+      issueByContent.set(contentKey, tooltip);
+    } else {
+      tooltip = issue.reason;
+    }
+    issueByNum.set(issue.index, tooltip);
+  });
+
+  // NOW: Parse [[ISSUE: text]] markers in article with instant tooltips
   const issueRegex = /\[\[ISSUE:\s*(.+?)\]\]/g;
-  const seenIssues = new Map(); // Map of issue text -> assigned number
+  const seenIssues = new Map();
   let nextIssueNum = 1;
-  const uniqueIssues = []; // Track unique issues in order of first appearance
 
   const html = articleText.replace(issueRegex, (match, problemText) => {
     const normalizedText = problemText.trim().toLowerCase();
     let issueNum;
 
     if (seenIssues.has(normalizedText)) {
-      // Same issue seen before - reuse its number
       issueNum = seenIssues.get(normalizedText);
     } else {
-      // New issue - assign next number
       issueNum = nextIssueNum++;
       seenIssues.set(normalizedText, issueNum);
-      uniqueIssues.push({ num: issueNum, text: problemText.trim() });
     }
 
-    return `<span class="edit-issue" title="See issue #${issueNum}">${escapeHtml(problemText)}</span><sup>[${issueNum}]</sup>`;
+    // Try position-based matching first
+    let tooltipText = issueByNum.get(String(issueNum));
+
+    // If not found, try content-based matching
+    if (!tooltipText) {
+      tooltipText = issueByContent.get(normalizedText);
+      if (!tooltipText) {
+        // Partial match as fallback
+        for (const [key, tip] of issueByContent.entries()) {
+          if (key.includes(normalizedText) || normalizedText.includes(key)) {
+            tooltipText = tip;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!tooltipText) {
+      tooltipText = `Issue #${issueNum}`;
+    }
+
+    const escapedTooltip = escapeHtml(tooltipText).replace(/\n/g, '<br>');
+
+    return `<span class="edit-issue"><span class="instant-tooltip">${escapedTooltip}</span>${escapeHtml(problemText)}</span><sup>[${issueNum}]</sup>`;
   });
 
   copyeditOutput.innerHTML = html.replace(/\n/g, '<br>');
 
-  // Parse the issues list from AI response - try multiple formats
-  const issues = [];
-
-  // Try strict format first: 1. "original" -> "fix" (reason)
-  const strictRegex = /(\d+)\.\s*[""]([^""]+)[""]\s*(?:->|→)\s*[""]([^""]+)[""]\s*\(([^)]+)\)/g;
-  let match;
-  while ((match = strictRegex.exec(issuesText)) !== null) {
-    issues.push({
-      index: match[1],
-      original: match[2],
-      fix: match[3],
-      reason: match[4]
-    });
-  }
-
-  // If strict parsing found fewer issues than marked in text, try looser parsing
-  if (issues.length < seenIssues.size) {
-    // Try: 1. "text" → "fix" — reason (or with dashes/colons)
-    const looseRegex = /(\d+)\.\s*[""]([^""]+)[""]\s*(?:->|→|:)\s*[""]([^""]+)[""]\s*[—\-–:]\s*(.+?)(?=\n\d+\.|$)/gs;
-    issues.length = 0; // Reset
-    while ((match = looseRegex.exec(issuesText)) !== null) {
-      issues.push({
-        index: match[1],
-        original: match[2],
-        fix: match[3],
-        reason: match[4].trim()
-      });
-    }
-  }
-
-  // Final fallback: just show numbered lines as-is
-  if (issues.length === 0 && issuesText.trim()) {
-    const lines = issuesText.trim().split('\n').filter(l => /^\d+\./.test(l.trim()));
-    lines.forEach((line, i) => {
-      issues.push({
-        index: String(i + 1),
-        original: '',
-        fix: '',
-        reason: line.replace(/^\d+\.\s*/, '')
-      });
-    });
-  }
-
+  // Display issues list
   if (issues.length > 0) {
     copyeditIssuesList.innerHTML = issues.map(issue => {
       if (issue.original && issue.fix) {
@@ -547,7 +598,8 @@ function renderFlagClaims(text) {
   let html = articleText.replace(claimRegex, (match, claim, category, reason) => {
     const catClass = getCategoryClass(category);
     claims.push({ claim, category: category.trim(), reason, catClass });
-    return `<span class="claim-to-verify claim-category-${catClass}" title="${escapeHtml(category)}: ${escapeHtml(reason)}">${escapeHtml(claim)}</span>`;
+    const tooltipText = `${escapeHtml(category)}: ${escapeHtml(reason)}`;
+    return `<span class="claim-to-verify claim-category-${catClass}"><span class="instant-tooltip">${tooltipText}</span>${escapeHtml(claim)}</span>`;
   });
 
   flagclaimsOutput.innerHTML = html.replace(/\n/g, '<br>');
@@ -608,6 +660,12 @@ function renderFactCheck(text) {
     return ` — ${escapeHtml(cleanDetail)}`;
   }
 
+  // Helper to create tooltip span
+  function makeTooltip(content) {
+    if (!content) return '';
+    return `<span class="instant-tooltip">${escapeHtml(content)}</span>`;
+  }
+
   // Parse different claim types - now with 3 parts: claim | detail | url
   const verifiedRegex = /\[\[VERIFIED:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\]\]/g;
   const verifiedSimpleRegex = /\[\[VERIFIED:\s*(.+?)\s*\|\s*(.+?)\]\]/g;
@@ -622,42 +680,42 @@ function renderFactCheck(text) {
   html = html.replace(verifiedRegex, (match, claim, evidence, url) => {
     const cleanUrl = extractUrl(url) || extractUrl(evidence);
     claims.push({ type: 'verified', claim, detail: evidence, url: cleanUrl });
-    const title = evidence ? `${evidence}` : 'Verified';
-    return `<span class="claim-verified" title="${escapeHtml(title)}">${escapeHtml(claim)}</span>`;
+    const tooltipContent = evidence || 'Verified';
+    return `<span class="claim-verified">${makeTooltip(tooltipContent)}${escapeHtml(claim)}</span>`;
   });
 
   // Replace verified claims (with evidence, no URL)
   html = html.replace(verifiedSimpleRegex, (match, claim, evidence) => {
     const url = extractUrl(evidence);
     claims.push({ type: 'verified', claim, detail: evidence, url });
-    return `<span class="claim-verified" title="${escapeHtml(evidence)}">${escapeHtml(claim)}</span>`;
+    return `<span class="claim-verified">${makeTooltip(evidence)}${escapeHtml(claim)}</span>`;
   });
 
   // Replace verified claims (basic - no evidence)
   html = html.replace(verifiedBasicRegex, (match, claim) => {
     claims.push({ type: 'verified', claim, detail: null, url: null });
-    return `<span class="claim-verified">${escapeHtml(claim)}</span>`;
+    return `<span class="claim-verified">${makeTooltip('Verified')}${escapeHtml(claim)}</span>`;
   });
 
   // Replace questionable claims
   html = html.replace(questionableRegex, (match, claim, concern, url) => {
     const cleanUrl = url ? extractUrl(url) : extractUrl(concern);
     claims.push({ type: 'questionable', claim, detail: concern, url: cleanUrl });
-    return `<span class="claim-questionable" title="${escapeHtml(concern)}">${escapeHtml(claim)}</span>`;
+    return `<span class="claim-questionable">${makeTooltip(concern)}${escapeHtml(claim)}</span>`;
   });
 
   // Replace incorrect claims
   html = html.replace(incorrectRegex, (match, claim, correction, url) => {
     const cleanUrl = url ? extractUrl(url) : extractUrl(correction);
     claims.push({ type: 'incorrect', claim, detail: correction, url: cleanUrl });
-    return `<span class="claim-incorrect" title="${escapeHtml(correction)}">${escapeHtml(claim)}</span>`;
+    return `<span class="claim-incorrect">${makeTooltip(correction)}${escapeHtml(claim)}</span>`;
   });
 
   // Replace check-current claims
   html = html.replace(checkCurrentRegex, (match, claim, whatToCheck, url) => {
     const cleanUrl = url ? extractUrl(url) : extractUrl(whatToCheck);
     claims.push({ type: 'check-current', claim, detail: whatToCheck, url: cleanUrl });
-    return `<span class="claim-check-current" title="${escapeHtml(whatToCheck)}">${escapeHtml(claim)}</span>`;
+    return `<span class="claim-check-current">${makeTooltip(whatToCheck)}${escapeHtml(claim)}</span>`;
   });
 
   factcheckOutput.innerHTML = html.replace(/\n/g, '<br>');
