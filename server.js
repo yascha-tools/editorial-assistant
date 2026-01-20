@@ -4,7 +4,161 @@ const cookieSession = require('cookie-session');
 const cheerio = require('cheerio');
 const path = require('path');
 const fs = require('fs');
+const initSqlJs = require('sql.js');
 require('dotenv').config();
+
+// ==================== ARTICLE ANALYTICS DATABASE SETUP ====================
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'articles.db');
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+let db = null;
+
+// Initialize database asynchronously
+async function initDatabase() {
+  const SQL = await initSqlJs();
+
+  // Load existing database or create new one
+  if (fs.existsSync(dbPath)) {
+    const fileBuffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(fileBuffer);
+  } else {
+    db = new SQL.Database();
+  }
+
+  // Initialize articles analytics tables
+  db.run(`
+    CREATE TABLE IF NOT EXISTS articles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      published_date TEXT NOT NULL,
+      source TEXT NOT NULL,
+
+      views INTEGER DEFAULT 0,
+      open_rate REAL DEFAULT 0,
+      new_paid_subs INTEGER DEFAULT 0,
+      canceled_paid_subs INTEGER DEFAULT 0,
+      new_free_subs INTEGER DEFAULT 0,
+      estimated_revenue REAL DEFAULT 0,
+
+      recipients INTEGER DEFAULT 0,
+      engagement_rate REAL DEFAULT 0,
+      click_through_rate REAL DEFAULT 0,
+      shares INTEGER DEFAULT 0,
+
+      article_type TEXT DEFAULT 'article',
+      access_type TEXT DEFAULT 'free',
+      author TEXT,
+      list_name TEXT DEFAULT 'persuasion',
+      likes INTEGER DEFAULT 0,
+      comments INTEGER DEFAULT 0,
+      original_source TEXT,
+
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(title, published_date, source)
+    )
+  `);
+
+  // Add new columns if they don't exist (for existing databases)
+  try { db.run(`ALTER TABLE articles ADD COLUMN list_name TEXT DEFAULT 'persuasion'`); } catch (e) { /* column exists */ }
+  try { db.run(`ALTER TABLE articles ADD COLUMN likes INTEGER DEFAULT 0`); } catch (e) { /* column exists */ }
+  try { db.run(`ALTER TABLE articles ADD COLUMN comments INTEGER DEFAULT 0`); } catch (e) { /* column exists */ }
+  try { db.run(`ALTER TABLE articles ADD COLUMN original_source TEXT`); } catch (e) { /* column exists */ }
+  try { db.run(`ALTER TABLE articles ADD COLUMN access_type TEXT DEFAULT 'free'`); } catch (e) { /* column exists */ }
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_date ON articles(published_date)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_type ON articles(article_type)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_list ON articles(list_name)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_access ON articles(access_type)`);
+
+  // Import metadata table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS article_import_metadata (
+      source TEXT PRIMARY KEY,
+      last_updated TEXT,
+      records_count INTEGER DEFAULT 0
+    )
+  `);
+
+  saveDatabase();
+  console.log('Article analytics database initialized');
+}
+
+// Save database to file
+function saveDatabase() {
+  if (!db) return;
+  const data = db.export();
+  const buffer = Buffer.from(data);
+  fs.writeFileSync(dbPath, buffer);
+}
+
+// Helper: run query and return all rows as array of objects
+function dbAll(sql, params = []) {
+  if (!db) return [];
+  try {
+    const stmt = db.prepare(sql);
+    if (params.length > 0) stmt.bind(params);
+    const results = [];
+    while (stmt.step()) {
+      results.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return results;
+  } catch (e) {
+    console.error('DB query error:', e.message);
+    return [];
+  }
+}
+
+// Helper: run query and return first row
+function dbGet(sql, params = []) {
+  const results = dbAll(sql, params);
+  return results.length > 0 ? results[0] : null;
+}
+
+// Helper: run query (INSERT/UPDATE/DELETE)
+function dbRun(sql, params = []) {
+  if (!db) return { changes: 0 };
+  try {
+    db.run(sql, params);
+    saveDatabase();
+    return { changes: db.getRowsModified() };
+  } catch (e) {
+    console.error('DB run error:', e.message);
+    return { changes: 0 };
+  }
+}
+
+// Helper to update import metadata
+function updateArticleImportMetadata(source, recordsCount) {
+  dbRun(`
+    INSERT INTO article_import_metadata (source, last_updated, records_count)
+    VALUES (?, datetime('now'), ?)
+    ON CONFLICT(source) DO UPDATE SET
+      last_updated = datetime('now'),
+      records_count = ?
+  `, [source, recordsCount, recordsCount]);
+}
+
+// Helper to parse numbers from strings
+function parseNumber(str) {
+  if (!str) return 0;
+  const cleaned = String(str).replace(/[$,\s%]/g, '');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
+
+// Helper to parse percentage (33.03% -> 0.3303)
+function parsePercent(str) {
+  if (!str) return 0;
+  const cleaned = String(str).replace(/[%\s]/g, '');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num / 100;
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -25,6 +179,11 @@ app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
+// Serve article analytics login page without auth
+app.get('/article-analytics/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'article-analytics-login.html'));
+});
+
 // Login endpoint
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
@@ -38,14 +197,49 @@ app.post('/api/login', (req, res) => {
   }
 });
 
+// Article Analytics login endpoint
+app.post('/api/article-analytics/login', (req, res) => {
+  const { password } = req.body;
+  const correctPassword = process.env.ANALYTICS_PASSWORD || process.env.APP_PASSWORD || 'editorial';
+
+  if (password === correctPassword) {
+    req.session.articleAnalyticsAuthenticated = true;
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Incorrect password' });
+  }
+});
+
 // Logout endpoint
 app.post('/api/logout', (req, res) => {
   req.session = null;
   res.json({ success: true });
 });
 
+// Article Analytics auth middleware
+function requireArticleAnalyticsAuth(req, res, next) {
+  if (req.session.articleAnalyticsAuthenticated) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Article analytics authentication required' });
+  }
+}
+
+// Serve article analytics dashboard (requires auth)
+app.get('/article-analytics', (req, res) => {
+  if (req.session.articleAnalyticsAuthenticated) {
+    res.sendFile(path.join(__dirname, 'public', 'article-analytics.html'));
+  } else {
+    res.redirect('/article-analytics/login');
+  }
+});
+
 // Auth middleware
 app.use((req, res, next) => {
+  // Skip auth for article analytics routes (they have their own auth)
+  if (req.path.startsWith('/api/article-analytics/')) {
+    return next();
+  }
   if (req.session.authenticated) {
     next();
   } else {
@@ -1071,6 +1265,558 @@ app.post('/api/regenerate-social', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Editorial Assistant running at http://localhost:${PORT}`);
+// ==================== ARTICLE ANALYTICS API ENDPOINTS ====================
+
+// Get all articles
+app.get('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, res) => {
+  try {
+    const source = req.query.source || 'all';
+    const listName = req.query.list_name || 'all';
+    const articleType = req.query.article_type || 'all';
+    const accessType = req.query.access_type || 'all';
+    let query = `SELECT * FROM articles`;
+    const conditions = [];
+    const params = [];
+
+    if (source !== 'all') {
+      conditions.push(`source = ?`);
+      params.push(source);
+    }
+
+    if (listName !== 'all') {
+      conditions.push(`list_name = ?`);
+      params.push(listName);
+    }
+
+    if (articleType !== 'all') {
+      conditions.push(`article_type = ?`);
+      params.push(articleType);
+    }
+
+    if (accessType !== 'all') {
+      conditions.push(`access_type = ?`);
+      params.push(accessType);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+
+    query += ` ORDER BY published_date DESC`;
+    const articles = dbAll(query, params);
+    res.json({ articles });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get analytics summary
+app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 90;
+    const source = req.query.source || 'all';
+    const listName = req.query.list_name || 'all';
+    const articleType = req.query.article_type || 'all';
+    const accessType = req.query.access_type || 'all';
+
+    let dateFilter = days > 0 ? `published_date >= date('now', '-${days} days')` : '1=1';
+    let sourceFilter = source !== 'all' ? `source = '${source}'` : '1=1';
+    let listFilter = listName !== 'all' ? `list_name = '${listName}'` : '1=1';
+    let typeFilter = articleType !== 'all' ? `article_type = '${articleType}'` : '1=1';
+    let accessFilter = accessType !== 'all' ? `access_type = '${accessType}'` : '1=1';
+    let whereClause = `WHERE ${dateFilter} AND ${sourceFilter} AND ${listFilter} AND ${typeFilter} AND ${accessFilter}`;
+
+    // Total stats
+    const totalStats = dbGet(`
+      SELECT
+        COUNT(*) as total_articles,
+        COALESCE(SUM(views), 0) as total_views,
+        COALESCE(AVG(views), 0) as avg_views,
+        COALESCE(AVG(open_rate), 0) as avg_open_rate,
+        COALESCE(SUM(new_paid_subs), 0) as total_new_paid_subs,
+        COALESCE(SUM(new_free_subs), 0) as total_new_free_subs,
+        COALESCE(SUM(estimated_revenue), 0) as total_revenue,
+        COALESCE(SUM(likes), 0) as total_likes
+      FROM articles ${whereClause}
+    `);
+
+    // Weekly data
+    const weeklyData = dbAll(`
+      SELECT
+        strftime('%Y-%W', published_date) as week,
+        COUNT(*) as article_count,
+        SUM(views) as total_views,
+        AVG(views) as avg_views,
+        AVG(open_rate) as avg_open_rate,
+        SUM(new_paid_subs + new_free_subs) as new_subs
+      FROM articles ${whereClause}
+      GROUP BY week
+      ORDER BY week DESC
+      LIMIT 52
+    `);
+
+    // Monthly data
+    const monthlyData = dbAll(`
+      SELECT
+        strftime('%Y-%m', published_date) as month,
+        COUNT(*) as article_count,
+        SUM(views) as total_views,
+        AVG(views) as avg_views,
+        AVG(open_rate) as avg_open_rate
+      FROM articles ${whereClause}
+      GROUP BY month
+      ORDER BY month DESC
+      LIMIT 12
+    `);
+
+    // Top 10 articles by views
+    const topArticles = dbAll(`
+      SELECT * FROM articles ${whereClause}
+      ORDER BY views DESC
+      LIMIT 10
+    `);
+
+    // Bottom 10 articles by views (excluding 0)
+    const bottomArticles = dbAll(`
+      SELECT * FROM articles ${whereClause} AND views > 0
+      ORDER BY views ASC
+      LIMIT 10
+    `);
+
+    // Latest 20 articles
+    const latestArticles = dbAll(`
+      SELECT * FROM articles ${whereClause}
+      ORDER BY published_date DESC
+      LIMIT 20
+    `);
+
+    // By article type
+    const byType = dbAll(`
+      SELECT
+        article_type,
+        COUNT(*) as count,
+        AVG(views) as avg_views,
+        SUM(views) as total_views,
+        AVG(open_rate) as avg_open_rate
+      FROM articles ${whereClause}
+      GROUP BY article_type
+      ORDER BY total_views DESC
+    `);
+
+    // By source
+    const bySource = dbAll(`
+      SELECT
+        source,
+        COUNT(*) as count,
+        AVG(views) as avg_views,
+        SUM(views) as total_views,
+        AVG(open_rate) as avg_open_rate,
+        SUM(new_paid_subs) as total_paid_subs,
+        SUM(new_free_subs) as total_free_subs
+      FROM articles
+      WHERE ${dateFilter} AND ${listFilter} AND ${typeFilter} AND ${accessFilter}
+      GROUP BY source
+      ORDER BY total_views DESC
+    `);
+
+    // By list
+    const byList = dbAll(`
+      SELECT
+        list_name,
+        COUNT(*) as count,
+        AVG(views) as avg_views,
+        SUM(views) as total_views,
+        AVG(open_rate) as avg_open_rate,
+        SUM(new_paid_subs) as total_paid_subs,
+        SUM(likes) as total_likes
+      FROM articles
+      WHERE ${dateFilter} AND ${sourceFilter} AND ${typeFilter} AND ${accessFilter}
+      GROUP BY list_name
+      ORDER BY total_views DESC
+    `);
+
+    res.json({
+      totalStats,
+      weeklyData,
+      monthlyData,
+      topArticles,
+      bottomArticles,
+      latestArticles,
+      byType,
+      bySource,
+      byList
+    });
+  } catch (error) {
+    console.error('Summary error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get import metadata
+app.get('/api/article-analytics/import-metadata', requireArticleAnalyticsAuth, (req, res) => {
+  try {
+    const metadata = dbAll(`SELECT source, last_updated, records_count FROM article_import_metadata`);
+    res.json(metadata);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Import CSV data
+app.post('/api/article-analytics/import/csv', requireArticleAnalyticsAuth, (req, res) => {
+  const { csvData, source } = req.body;
+
+  if (!csvData || !csvData.trim()) {
+    return res.status(400).json({ error: 'CSV data is required' });
+  }
+
+  if (!source || !['ym', 'persuasion'].includes(source)) {
+    return res.status(400).json({ error: 'Source must be "ym" or "persuasion"' });
+  }
+
+  try {
+    const lines = csvData.trim().split('\n');
+    const header = lines[0].toLowerCase();
+    const cols = header.split(',').map(c => c.trim().replace(/"/g, ''));
+
+    // Detect columns
+    const titleIdx = cols.findIndex(c => c.includes('title') || c.includes('post') || c.includes('name'));
+    const dateIdx = cols.findIndex(c => c.includes('date') || c.includes('published'));
+    const viewsIdx = cols.findIndex(c => c.includes('view') || c.includes('total view'));
+    const openRateIdx = cols.findIndex(c => c.includes('open rate') || c.includes('open_rate'));
+    const paidSubsIdx = cols.findIndex(c => c.includes('paid sub') || c.includes('new paid'));
+    const freeSubsIdx = cols.findIndex(c => c.includes('free sub') || c.includes('new free'));
+    const revenueIdx = cols.findIndex(c => c.includes('revenue') || c.includes('estimated'));
+    const recipientsIdx = cols.findIndex(c => c.includes('recipient') || c.includes('sent'));
+    const engagementIdx = cols.findIndex(c => c.includes('engagement'));
+    const sharesIdx = cols.findIndex(c => c.includes('share'));
+
+    console.log('Article import - columns detected:', { cols, titleIdx, dateIdx, viewsIdx, openRateIdx, source });
+
+    if (titleIdx === -1) {
+      return res.status(400).json({ error: 'Could not find title column' });
+    }
+
+    let imported = 0;
+    let skipped = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // Parse CSV line (handle quoted fields)
+      const values = [];
+      let current = '';
+      let inQuotes = false;
+      for (const char of line) {
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          values.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      values.push(current.trim());
+
+      const title = values[titleIdx]?.replace(/"/g, '');
+      if (!title) {
+        skipped++;
+        continue;
+      }
+
+      const dateStr = dateIdx >= 0 ? values[dateIdx]?.replace(/"/g, '') : null;
+      const views = viewsIdx >= 0 ? parseNumber(values[viewsIdx]) : 0;
+      const openRate = openRateIdx >= 0 ? parsePercent(values[openRateIdx]) : 0;
+      const paidSubs = paidSubsIdx >= 0 ? parseNumber(values[paidSubsIdx]) : 0;
+      const freeSubs = freeSubsIdx >= 0 ? parseNumber(values[freeSubsIdx]) : 0;
+      const revenue = revenueIdx >= 0 ? parseNumber(values[revenueIdx]) : 0;
+      const recipients = recipientsIdx >= 0 ? parseNumber(values[recipientsIdx]) : 0;
+      const engagement = engagementIdx >= 0 ? parsePercent(values[engagementIdx]) : 0;
+      const shares = sharesIdx >= 0 ? parseNumber(values[sharesIdx]) : 0;
+
+      // Parse date
+      let publishedDate = dateStr;
+      if (dateStr) {
+        const parsed = new Date(dateStr);
+        if (!isNaN(parsed.getTime())) {
+          publishedDate = parsed.toISOString().split('T')[0];
+        }
+      }
+
+      if (i <= 3) {
+        console.log(`Row ${i}: title="${title}", views=${views}, openRate=${openRate}, date=${publishedDate}`);
+      }
+
+      try {
+        dbRun(`
+          INSERT INTO articles (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, recipients, engagement_rate, shares)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(title, published_date, source) DO UPDATE SET
+            views = ?, open_rate = ?, new_paid_subs = ?, new_free_subs = ?, estimated_revenue = ?,
+            recipients = ?, engagement_rate = ?, shares = ?, updated_at = datetime('now')
+        `, [title, publishedDate || new Date().toISOString().split('T')[0], source, views, openRate, paidSubs, freeSubs, revenue, recipients, engagement, shares,
+            views, openRate, paidSubs, freeSubs, revenue, recipients, engagement, shares]);
+        imported++;
+      } catch (e) {
+        console.error(`Error importing row ${i}:`, e.message);
+        skipped++;
+      }
+    }
+
+    updateArticleImportMetadata(source, imported);
+    res.json({ success: true, imported, skipped });
+  } catch (error) {
+    console.error('Import error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add/Update article manually
+app.post('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, res) => {
+  const { title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, article_type, author } = req.body;
+
+  if (!title || !published_date || !source) {
+    return res.status(400).json({ error: 'Title, published_date, and source are required' });
+  }
+
+  try {
+    dbRun(`
+      INSERT INTO articles (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, article_type, author)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(title, published_date, source) DO UPDATE SET
+        views = ?, open_rate = ?, new_paid_subs = ?, new_free_subs = ?, estimated_revenue = ?,
+        article_type = ?, author = ?, updated_at = datetime('now')
+    `, [title, published_date, source, views || 0, open_rate || 0, new_paid_subs || 0, new_free_subs || 0, estimated_revenue || 0, article_type || 'essay', author || null,
+        views || 0, open_rate || 0, new_paid_subs || 0, new_free_subs || 0, estimated_revenue || 0, article_type || 'essay', author || null]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Add article error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update article
+app.put('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, (req, res) => {
+  try {
+    const { id } = req.params;
+    const { published_date, source, views, open_rate, new_paid_subs, canceled_paid_subs, new_free_subs, estimated_revenue, recipients, engagement_rate, click_through_rate, shares, article_type, access_type, author, list_name, likes, comments } = req.body;
+
+    const updates = [];
+    const params = [];
+
+    if (published_date !== undefined) { updates.push('published_date = ?'); params.push(published_date); }
+    if (source !== undefined) { updates.push('source = ?'); params.push(source); }
+    if (views !== undefined) { updates.push('views = ?'); params.push(views); }
+    if (open_rate !== undefined) { updates.push('open_rate = ?'); params.push(open_rate); }
+    if (new_paid_subs !== undefined) { updates.push('new_paid_subs = ?'); params.push(new_paid_subs); }
+    if (canceled_paid_subs !== undefined) { updates.push('canceled_paid_subs = ?'); params.push(canceled_paid_subs); }
+    if (new_free_subs !== undefined) { updates.push('new_free_subs = ?'); params.push(new_free_subs); }
+    if (estimated_revenue !== undefined) { updates.push('estimated_revenue = ?'); params.push(estimated_revenue); }
+    if (recipients !== undefined) { updates.push('recipients = ?'); params.push(recipients); }
+    if (engagement_rate !== undefined) { updates.push('engagement_rate = ?'); params.push(engagement_rate); }
+    if (click_through_rate !== undefined) { updates.push('click_through_rate = ?'); params.push(click_through_rate); }
+    if (shares !== undefined) { updates.push('shares = ?'); params.push(shares); }
+    if (article_type !== undefined) { updates.push('article_type = ?'); params.push(article_type); }
+    if (access_type !== undefined) { updates.push('access_type = ?'); params.push(access_type); }
+    if (author !== undefined) { updates.push('author = ?'); params.push(author); }
+    if (list_name !== undefined) { updates.push('list_name = ?'); params.push(list_name); }
+    if (likes !== undefined) { updates.push('likes = ?'); params.push(likes); }
+    if (comments !== undefined) { updates.push('comments = ?'); params.push(comments); }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    updates.push('updated_at = datetime(\'now\')');
+    params.push(id);
+
+    dbRun(`UPDATE articles SET ${updates.join(', ')} WHERE id = ?`, params);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete article
+app.delete('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, (req, res) => {
+  try {
+    dbRun('DELETE FROM articles WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync from Substack (runs scraper)
+app.post('/api/article-analytics/sync', requireArticleAnalyticsAuth, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const scraperPath = path.join(__dirname, 'scrape-articles.js');
+
+  if (!fs.existsSync(scraperPath)) {
+    sendEvent({ status: 'error', message: 'Scraper not found. Please create scrape-articles.js first.' });
+    res.end();
+    return;
+  }
+
+  sendEvent({ status: 'progress', message: 'Starting article scraper...' });
+
+  const { spawn } = require('child_process');
+  const scraper = spawn('node', [scraperPath], {
+    cwd: __dirname,
+    env: { ...process.env, PATH: process.env.PATH }
+  });
+
+  scraper.stdout.on('data', (data) => {
+    const lines = data.toString().split('\n').filter(l => l.trim());
+    lines.forEach(line => {
+      sendEvent({ status: 'progress', message: line });
+    });
+  });
+
+  scraper.stderr.on('data', (data) => {
+    sendEvent({ status: 'error', message: data.toString() });
+  });
+
+  scraper.on('close', async (code) => {
+    if (code === 0) {
+      sendEvent({ status: 'progress', message: 'Scraper finished. Importing data...' });
+
+      // Auto-import the CSV files
+      try {
+        const ymCsvPath = path.join(__dirname, 'data', 'ym-articles.csv');
+        const persuasionCsvPath = path.join(__dirname, 'data', 'persuasion-articles.csv');
+
+        if (fs.existsSync(ymCsvPath)) {
+          const ymCsv = fs.readFileSync(ymCsvPath, 'utf-8');
+          const ymResult = importArticleCsv(ymCsv, 'ym');
+          updateArticleImportMetadata('ym', ymResult.imported);
+          sendEvent({ status: 'progress', message: `YM: Imported ${ymResult.imported} articles` });
+        }
+
+        if (fs.existsSync(persuasionCsvPath)) {
+          const pCsv = fs.readFileSync(persuasionCsvPath, 'utf-8');
+          const pResult = importArticleCsv(pCsv, 'persuasion');
+          updateArticleImportMetadata('persuasion', pResult.imported);
+          sendEvent({ status: 'progress', message: `Persuasion: Imported ${pResult.imported} articles` });
+        }
+
+        sendEvent({ status: 'complete', message: 'Sync complete!' });
+      } catch (e) {
+        sendEvent({ status: 'error', message: `Import error: ${e.message}` });
+      }
+    } else {
+      sendEvent({ status: 'error', message: `Scraper exited with code ${code}` });
+    }
+    res.end();
+  });
+});
+
+// Helper function for importing article CSV (reusable)
+function importArticleCsv(csvData, source) {
+  const lines = csvData.trim().split('\n');
+  const header = lines[0].toLowerCase();
+  const cols = header.split(',').map(c => c.trim().replace(/"/g, ''));
+
+  const titleIdx = cols.findIndex(c => c.includes('title') || c.includes('post'));
+  const dateIdx = cols.findIndex(c => c.includes('date') || c.includes('published'));
+  const viewsIdx = cols.findIndex(c => c.includes('view'));
+  const openRateIdx = cols.findIndex(c => c.includes('open rate') || c.includes('open_rate'));
+  const paidSubsIdx = cols.findIndex(c => c.includes('paid sub') || c.includes('new paid'));
+  const freeSubsIdx = cols.findIndex(c => c.includes('free sub') || c.includes('new free'));
+  const revenueIdx = cols.findIndex(c => c.includes('revenue'));
+  const authorIdx = cols.findIndex(c => c === 'author');
+  const listNameIdx = cols.findIndex(c => c === 'list_name' || c.includes('list'));
+  const likesIdx = cols.findIndex(c => c === 'likes');
+  const commentsIdx = cols.findIndex(c => c === 'comments');
+  const articleTypeIdx = cols.findIndex(c => c === 'article_type');
+  const accessTypeIdx = cols.findIndex(c => c === 'access_type');
+
+  let imported = 0;
+  let skippedYmDupes = 0;
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const values = [];
+    let current = '';
+    let inQuotes = false;
+    for (const char of line) {
+      if (char === '"') inQuotes = !inQuotes;
+      else if (char === ',' && !inQuotes) { values.push(current.trim()); current = ''; }
+      else current += char;
+    }
+    values.push(current.trim());
+
+    const title = values[titleIdx]?.replace(/"/g, '');
+    if (!title) continue;
+
+    const dateStr = dateIdx >= 0 ? values[dateIdx]?.replace(/"/g, '') : null;
+    let publishedDate = dateStr;
+    if (dateStr) {
+      const parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) {
+        publishedDate = parsed.toISOString().split('T')[0];
+      }
+    }
+
+    const views = viewsIdx >= 0 ? parseNumber(values[viewsIdx]) : 0;
+    const openRate = openRateIdx >= 0 ? parsePercent(values[openRateIdx]) : 0;
+    const paidSubs = paidSubsIdx >= 0 ? parseNumber(values[paidSubsIdx]) : 0;
+    const freeSubs = freeSubsIdx >= 0 ? parseNumber(values[freeSubsIdx]) : 0;
+    const revenue = revenueIdx >= 0 ? parseNumber(values[revenueIdx]) : 0;
+    const author = authorIdx >= 0 ? values[authorIdx]?.replace(/"/g, '') : null;
+    const listName = listNameIdx >= 0 ? values[listNameIdx]?.replace(/"/g, '') : source;
+    const likes = likesIdx >= 0 ? parseNumber(values[likesIdx]) : 0;
+    const comments = commentsIdx >= 0 ? parseNumber(values[commentsIdx]) : 0;
+    const articleType = articleTypeIdx >= 0 ? values[articleTypeIdx]?.replace(/"/g, '') : 'article';
+    const accessType = accessTypeIdx >= 0 ? values[accessTypeIdx]?.replace(/"/g, '') : 'free';
+
+    // Skip YM duplicates when importing from Persuasion
+    if (source === 'persuasion' && listName === 'ym') {
+      skippedYmDupes++;
+      continue;
+    }
+
+    try {
+      dbRun(`
+        INSERT INTO articles (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, author, list_name, article_type, access_type, likes, comments, original_source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(title, published_date, source) DO UPDATE SET
+          views = ?, open_rate = ?, new_paid_subs = ?, new_free_subs = ?, estimated_revenue = ?,
+          author = COALESCE(?, author), list_name = COALESCE(?, list_name), article_type = COALESCE(?, article_type), access_type = COALESCE(?, access_type), likes = ?, comments = ?,
+          updated_at = datetime('now')
+      `, [title, publishedDate || new Date().toISOString().split('T')[0], source, views, openRate, paidSubs, freeSubs, revenue, author, listName, articleType, accessType, likes, comments, source,
+          views, openRate, paidSubs, freeSubs, revenue, author, listName, articleType, accessType, likes, comments]);
+      imported++;
+    } catch (e) {
+      // Skip errors
+    }
+  }
+
+  if (skippedYmDupes > 0) {
+    console.log(`   Skipped ${skippedYmDupes} YM duplicates from Persuasion import`);
+  }
+
+  return { imported };
+}
+
+// Initialize database and start server
+initDatabase().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Editorial Assistant running at http://localhost:${PORT}`);
+    console.log(`Article Analytics available at http://localhost:${PORT}/article-analytics`);
+  });
+}).catch(err => {
+  console.error('Failed to initialize database:', err);
+  process.exit(1);
 });

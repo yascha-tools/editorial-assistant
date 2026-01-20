@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Article Analytics</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+    }
+    .header {
+      background: #1a365d;
+      color: white;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 1.5rem; }
+    .header-right { display: flex; gap: 1rem; align-items: center; }
+    .header select, .header button {
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      border: none;
+      font-size: 0.9rem;
+    }
+    .header select { background: white; }
+    .header button { background: #2c5282; color: white; cursor: pointer; }
+    .header button:hover { background: #3182ce; }
+
+    .tabs {
+      background: white;
+      border-bottom: 1px solid #ddd;
+      padding: 0 2rem;
+      display: flex;
+      gap: 0;
+    }
+    .tab {
+      padding: 1rem 1.5rem;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      color: #666;
+      font-weight: 500;
+    }
+    .tab:hover { color: #1a365d; }
+    .tab.active { color: #1a365d; border-bottom-color: #1a365d; }
+
+    .content { padding: 2rem; max-width: 1400px; margin: 0 auto; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .stat-card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .stat-card h3 { font-size: 0.85rem; color: #666; margin-bottom: 0.5rem; text-transform: uppercase; }
+    .stat-card .value { font-size: 2rem; font-weight: 600; color: #1a365d; }
+    .stat-card .subtext { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
+
+    .section {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .section h2 { font-size: 1.1rem; margin-bottom: 1rem; color: #1a365d; }
+
+    .data-freshness {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+      font-size: 0.9rem;
+      color: #666;
+      margin-bottom: 1rem;
+      padding: 0.75rem 1rem;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+    .data-freshness strong { color: #333; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #eee; }
+    th {
+      font-weight: 600;
+      color: #666;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    th:hover { color: #1a365d; }
+    th.sorted { color: #1a365d; }
+    .number { text-align: right; font-variant-numeric: tabular-nums; }
+    .above-avg { color: #22863a; font-weight: 600; }
+    .below-avg { color: #999; }
+    .source-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .source-ym { background: #e3f2fd; color: #1565c0; }
+    .source-persuasion { background: #fff3e0; color: #ef6c00; }
+    .list-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 500;
+    }
+    .list-persuasion { background: #fff3e0; color: #ef6c00; }
+    .list-ym { background: #e3f2fd; color: #1565c0; }
+    .list-bookstack { background: #e8f5e9; color: #2e7d32; }
+    .list-frankly_fukuyama { background: #fce4ec; color: #c2185b; }
+    .list-american_purpose { background: #ede7f6; color: #512da8; }
+
+    .chart-container { position: relative; height: 300px; margin-bottom: 1rem; }
+    .chart-container.tall { height: 400px; }
+
+    .top-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 900px) { .top-bottom-grid { grid-template-columns: 1fr; } }
+
+    .article-row { cursor: pointer; }
+    .article-row:hover { background: #f8f9fa; }
+    .article-details { display: none; background: #f8f9fa; }
+    .article-details.show { display: table-row; }
+    .article-details td { padding: 1rem; }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+    }
+    .detail-item { }
+    .detail-item label { font-size: 0.75rem; color: #666; text-transform: uppercase; }
+    .detail-item .val { font-size: 1.1rem; font-weight: 600; }
+
+    .import-section { margin-bottom: 1.5rem; }
+    .import-section h3 { margin-bottom: 0.75rem; font-size: 1rem; }
+    .import-section textarea {
+      width: 100%;
+      height: 150px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
+    }
+    .import-section button {
+      padding: 0.5rem 1rem;
+      background: #1a365d;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .import-section button:hover { background: #2c5282; }
+    .import-section button:disabled { background: #ccc; cursor: not-allowed; }
+
+    .sync-output {
+      background: #1a1a1a;
+      color: #0f0;
+      padding: 1rem;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      display: none;
+    }
+    .sync-output.show { display: block; }
+
+    .hidden { display: none !important; }
+
+    .edit-modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    .edit-modal.hidden { display: none; }
+    .edit-modal-content {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .edit-modal h2 { margin-bottom: 1rem; }
+    .edit-modal label {
+      display: block;
+      margin-bottom: 0.25rem;
+      font-size: 0.85rem;
+      color: #666;
+    }
+    .edit-modal input, .edit-modal select {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+    }
+    .edit-modal-buttons {
+      display: flex;
+      gap: 1rem;
+      justify-content: flex-end;
+      margin-top: 1rem;
+    }
+    .edit-modal-buttons button {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .edit-modal-buttons .save { background: #1a365d; color: white; }
+    .edit-modal-buttons .cancel { background: #eee; }
+    .edit-modal-buttons .delete { background: #c00; color: white; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Article Analytics</h1>
+    <div class="header-right">
+      <select id="source-filter">
+        <option value="all">All Sources</option>
+        <option value="ym">YM Substack</option>
+        <option value="persuasion">Persuasion</option>
+      </select>
+      <select id="list-filter">
+        <option value="all">All Lists</option>
+        <option value="persuasion">Persuasion</option>
+        <option value="ym">YM (Yascha Mounk)</option>
+        <option value="bookstack">Bookstack</option>
+        <option value="frankly_fukuyama">Frankly Fukuyama</option>
+        <option value="american_purpose">American Purpose</option>
+      </select>
+      <select id="type-filter" class="hidden">
+        <option value="all">All Types</option>
+        <option value="article">Articles</option>
+        <option value="podcast">Podcasts</option>
+      </select>
+      <select id="access-filter">
+        <option value="all">All Access</option>
+        <option value="free">Free</option>
+        <option value="paid">Paid</option>
+        <option value="preview">Preview</option>
+      </select>
+      <select id="days-filter">
+        <option value="30">Last 30 Days</option>
+        <option value="60">Last 60 Days</option>
+        <option value="90" selected>Last 90 Days</option>
+        <option value="180">Last 180 Days</option>
+        <option value="365">Last Year</option>
+        <option value="0">All Time</option>
+      </select>
+      <button onclick="loadData()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="articles">Articles</div>
+    <div class="tab" data-tab="import">Import</div>
+  </div>
+
+  <div class="content">
+    <!-- Overview Tab -->
+    <div class="tab-content active" id="overview">
+      <div class="data-freshness" id="data-freshness"></div>
+
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card">
+          <h3>Total Articles</h3>
+          <div class="value" id="stat-total-articles">-</div>
+        </div>
+        <div class="stat-card">
+          <h3>Total Views</h3>
+          <div class="value" id="stat-total-views">-</div>
+        </div>
+        <div class="stat-card">
+          <h3>Avg Views</h3>
+          <div class="value" id="stat-avg-views">-</div>
+        </div>
+        <div class="stat-card">
+          <h3>Avg Open Rate</h3>
+          <div class="value" id="stat-avg-open-rate">-</div>
+        </div>
+        <div class="stat-card">
+          <h3>New Paid Subs</h3>
+          <div class="value" id="stat-paid-subs">-</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Latest Articles Performance</h2>
+        <div class="chart-container tall">
+          <canvas id="latest-articles-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Weekly Performance</h2>
+        <div class="chart-container">
+          <canvas id="weekly-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="top-bottom-grid">
+        <div class="section">
+          <h2>Top 10 by Views</h2>
+          <table id="top-articles-table">
+            <thead><tr><th>Title</th><th class="number">Views</th><th class="number">Open Rate</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="section">
+          <h2>Bottom 10 by Views</h2>
+          <table id="bottom-articles-table">
+            <thead><tr><th>Title</th><th class="number">Views</th><th class="number">Open Rate</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Performance by Source</h2>
+        <table id="source-table">
+          <thead><tr><th>Source</th><th class="number">Articles</th><th class="number">Avg Views</th><th class="number">Avg Open Rate</th><th class="number">New Paid Subs</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="section">
+        <h2>Performance by List</h2>
+        <table id="list-table">
+          <thead><tr><th>List</th><th class="number">Articles</th><th class="number">Avg Views</th><th class="number">Avg Open Rate</th><th class="number">New Paid Subs</th><th class="number">Likes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Articles Tab -->
+    <div class="tab-content" id="articles">
+      <div class="section">
+        <h2>All Articles</h2>
+        <table id="articles-table">
+          <thead>
+            <tr>
+              <th data-sort="title">Title</th>
+              <th data-sort="author">Author</th>
+              <th data-sort="published_date">Date</th>
+              <th data-sort="list_name">List</th>
+              <th class="number" data-sort="views">Views</th>
+              <th class="number" data-sort="likes">Likes</th>
+              <th class="number" data-sort="open_rate">Open Rate</th>
+              <th class="number" data-sort="new_paid_subs">+Paid</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Import Tab -->
+    <div class="tab-content" id="import">
+      <div class="section">
+        <h2>Sync from Substack</h2>
+        <p style="color: #666; margin-bottom: 1rem;">Automatically scrape article data from YM Substack and Persuasion.</p>
+        <button id="sync-btn" onclick="syncFromSubstack()">Sync Now</button>
+        <div class="sync-output" id="sync-output"></div>
+      </div>
+
+      <div class="import-section">
+        <h3>Import YM Substack CSV</h3>
+        <textarea id="ym-csv" placeholder="Paste CSV data here (title,date,views,open_rate,paid_subs,free_subs,revenue)"></textarea>
+        <button onclick="importCsv('ym')">Import YM Data</button>
+      </div>
+
+      <div class="import-section">
+        <h3>Import Persuasion CSV</h3>
+        <textarea id="persuasion-csv" placeholder="Paste CSV data here (title,date,views,open_rate,paid_subs,free_subs,revenue)"></textarea>
+        <button onclick="importCsv('persuasion')">Import Persuasion Data</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="edit-modal hidden" id="edit-modal">
+    <div class="edit-modal-content">
+      <h2>Edit Article</h2>
+      <input type="hidden" id="edit-id">
+      <label>Published Date</label>
+      <input type="date" id="edit-date">
+      <label>Source</label>
+      <select id="edit-source">
+        <option value="ym">YM Substack</option>
+        <option value="persuasion">Persuasion</option>
+      </select>
+      <label>List</label>
+      <select id="edit-list">
+        <option value="persuasion">Persuasion</option>
+        <option value="ym">YM (Yascha Mounk)</option>
+        <option value="bookstack">Bookstack</option>
+        <option value="frankly_fukuyama">Frankly Fukuyama</option>
+        <option value="american_purpose">American Purpose</option>
+      </select>
+      <label>Author</label>
+      <input type="text" id="edit-author">
+      <label>Views</label>
+      <input type="number" id="edit-views">
+      <label>Open Rate (%)</label>
+      <input type="number" id="edit-open-rate" step="0.01">
+      <label>New Paid Subscribers</label>
+      <input type="number" id="edit-paid-subs">
+      <label>New Free Subscribers</label>
+      <input type="number" id="edit-free-subs">
+      <label>Article Type</label>
+      <select id="edit-type">
+        <option value="article">Article</option>
+        <option value="podcast">Podcast</option>
+        <option value="essay">Essay</option>
+        <option value="interview">Interview</option>
+        <option value="news">News</option>
+        <option value="roundup">Roundup</option>
+        <option value="other">Other</option>
+      </select>
+      <label>Access Type</label>
+      <select id="edit-access">
+        <option value="free">Free</option>
+        <option value="paid">Paid</option>
+        <option value="preview">Preview</option>
+      </select>
+      <div class="edit-modal-buttons">
+        <button class="delete" onclick="deleteArticle()">Delete</button>
+        <button class="cancel" onclick="closeEditModal()">Cancel</button>
+        <button class="save" onclick="saveArticle()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let articles = [];
+    let summary = null;
+    let latestChart = null;
+    let weeklyChart = null;
+    let sortField = 'published_date';
+    let sortDir = 'desc';
+
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    // Format number
+    function formatNumber(n) {
+      if (n == null) return '-';
+      return Math.round(n).toLocaleString();
+    }
+
+    // Format percentage
+    function formatPercent(n) {
+      if (n == null) return '-';
+      return (n * 100).toFixed(1) + '%';
+    }
+
+    // Format currency
+    function formatCurrency(n) {
+      if (n == null) return '-';
+      return '$' + Math.round(n).toLocaleString();
+    }
+
+    // Toggle filters based on source selection
+    function updateFilterVisibility() {
+      const source = document.getElementById('source-filter').value;
+      const listFilter = document.getElementById('list-filter');
+      const typeFilter = document.getElementById('type-filter');
+
+      if (source === 'ym') {
+        // For YM Substack, show type filter (Articles/Podcasts) instead of list filter
+        listFilter.classList.add('hidden');
+        typeFilter.classList.remove('hidden');
+        listFilter.value = 'all'; // Reset list filter
+      } else {
+        // For Persuasion or All Sources, show list filter
+        listFilter.classList.remove('hidden');
+        typeFilter.classList.add('hidden');
+        typeFilter.value = 'all'; // Reset type filter
+      }
+    }
+
+    // Load data
+    async function loadData() {
+      const days = document.getElementById('days-filter').value;
+      const source = document.getElementById('source-filter').value;
+      const listName = document.getElementById('list-filter').value;
+      const articleType = document.getElementById('type-filter').value;
+      const accessType = document.getElementById('access-filter').value;
+
+      try {
+        const [articlesRes, summaryRes, metadataRes] = await Promise.all([
+          fetch(`/api/article-analytics/articles?source=${source}&list_name=${listName}&article_type=${articleType}&access_type=${accessType}`),
+          fetch(`/api/article-analytics/summary?days=${days}&source=${source}&list_name=${listName}&article_type=${articleType}&access_type=${accessType}`),
+          fetch('/api/article-analytics/import-metadata')
+        ]);
+
+        if (articlesRes.status === 401) {
+          window.location.href = '/article-analytics/login';
+          return;
+        }
+
+        articles = (await articlesRes.json()).articles || [];
+        summary = await summaryRes.json();
+        const metadata = await metadataRes.json();
+
+        renderStats();
+        renderDataFreshness(metadata);
+        renderLatestChart();
+        renderWeeklyChart();
+        renderTopBottom();
+        renderSourceTable();
+        renderListTable();
+        renderArticlesTable();
+      } catch (err) {
+        console.error('Load error:', err);
+      }
+    }
+
+    // Render stats
+    function renderStats() {
+      if (!summary || !summary.totalStats) return;
+      const s = summary.totalStats;
+      document.getElementById('stat-total-articles').textContent = formatNumber(s.total_articles);
+      document.getElementById('stat-total-views').textContent = formatNumber(s.total_views);
+      document.getElementById('stat-avg-views').textContent = formatNumber(s.avg_views);
+      document.getElementById('stat-avg-open-rate').textContent = formatPercent(s.avg_open_rate);
+      document.getElementById('stat-paid-subs').textContent = formatNumber(s.total_new_paid_subs);
+    }
+
+    // Render data freshness
+    function renderDataFreshness(metadata) {
+      const container = document.getElementById('data-freshness');
+      if (!metadata || metadata.length === 0) {
+        container.innerHTML = '<span>No data imported yet</span>';
+        return;
+      }
+      container.innerHTML = metadata.map(m => {
+        const date = m.last_updated ? new Date(m.last_updated).toLocaleString() : 'Never';
+        const label = m.source === 'ym' ? 'YM Substack' : 'Persuasion';
+        return `<span><strong>${label}:</strong> ${date} (${m.records_count} articles)</span>`;
+      }).join('');
+    }
+
+    // Render latest articles chart
+    function renderLatestChart() {
+      if (!summary || !summary.latestArticles) return;
+      // Show newest articles first (at top of chart)
+      const latest = summary.latestArticles.slice(0, 15);
+      const avgViews = summary.totalStats?.avg_views || 0;
+
+      const ctx = document.getElementById('latest-articles-chart').getContext('2d');
+      if (latestChart) latestChart.destroy();
+
+      latestChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: latest.map(a => a.title.substring(0, 40) + (a.title.length > 40 ? '...' : '')),
+          datasets: [{
+            label: 'Views',
+            data: latest.map(a => a.views),
+            backgroundColor: latest.map(a => a.views >= avgViews ? 'rgba(34, 134, 58, 0.7)' : 'rgba(200, 200, 200, 0.7)'),
+            borderColor: latest.map(a => a.views >= avgViews ? 'rgb(34, 134, 58)' : 'rgb(180, 180, 180)'),
+            borderWidth: 1
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            annotation: {
+              annotations: {
+                avgLine: {
+                  type: 'line',
+                  xMin: avgViews,
+                  xMax: avgViews,
+                  borderColor: 'rgba(26, 54, 93, 0.8)',
+                  borderWidth: 2,
+                  borderDash: [5, 5],
+                  label: {
+                    display: true,
+                    content: `Avg: ${formatNumber(avgViews)}`,
+                    position: 'start'
+                  }
+                }
+              }
+            }
+          },
+          scales: {
+            x: { beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    // Render weekly chart
+    function renderWeeklyChart() {
+      if (!summary || !summary.weeklyData) return;
+      const weekly = summary.weeklyData.slice(0, 12).reverse();
+
+      const ctx = document.getElementById('weekly-chart').getContext('2d');
+      if (weeklyChart) weeklyChart.destroy();
+
+      weeklyChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: weekly.map(w => w.week),
+          datasets: [
+            {
+              label: 'Total Views',
+              data: weekly.map(w => w.total_views),
+              backgroundColor: 'rgba(26, 54, 93, 0.7)',
+              yAxisID: 'y'
+            },
+            {
+              label: 'Articles',
+              data: weekly.map(w => w.article_count),
+              type: 'line',
+              borderColor: 'rgb(239, 108, 0)',
+              backgroundColor: 'rgba(239, 108, 0, 0.1)',
+              yAxisID: 'y1',
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: true, position: 'left', title: { display: true, text: 'Views' } },
+            y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Articles' } }
+          }
+        }
+      });
+    }
+
+    // Render top/bottom tables
+    function renderTopBottom() {
+      if (!summary) return;
+
+      const renderTable = (tableId, articles) => {
+        const tbody = document.querySelector(`#${tableId} tbody`);
+        tbody.innerHTML = articles.map(a => `
+          <tr>
+            <td>${a.title.substring(0, 50)}${a.title.length > 50 ? '...' : ''}</td>
+            <td class="number">${formatNumber(a.views)}</td>
+            <td class="number">${formatPercent(a.open_rate)}</td>
+          </tr>
+        `).join('');
+      };
+
+      renderTable('top-articles-table', summary.topArticles || []);
+      renderTable('bottom-articles-table', summary.bottomArticles || []);
+    }
+
+    // Render source table
+    function renderSourceTable() {
+      if (!summary || !summary.bySource) return;
+      const tbody = document.querySelector('#source-table tbody');
+      tbody.innerHTML = summary.bySource.map(s => `
+        <tr>
+          <td><span class="source-badge source-${s.source}">${s.source === 'ym' ? 'YM Substack' : 'Persuasion'}</span></td>
+          <td class="number">${s.count}</td>
+          <td class="number">${formatNumber(s.avg_views)}</td>
+          <td class="number">${formatPercent(s.avg_open_rate)}</td>
+          <td class="number">${formatNumber(s.total_paid_subs)}</td>
+        </tr>
+      `).join('');
+    }
+
+    // Render list table
+    function renderListTable() {
+      if (!summary || !summary.byList) return;
+      const tbody = document.querySelector('#list-table tbody');
+      const listLabels = {
+        'persuasion': 'Persuasion',
+        'ym': 'YM (Yascha Mounk)',
+        'bookstack': 'Bookstack',
+        'frankly_fukuyama': 'Frankly Fukuyama',
+        'american_purpose': 'American Purpose'
+      };
+      tbody.innerHTML = summary.byList.map(l => `
+        <tr>
+          <td><span class="list-badge list-${l.list_name}">${listLabels[l.list_name] || l.list_name}</span></td>
+          <td class="number">${l.count}</td>
+          <td class="number">${formatNumber(l.avg_views)}</td>
+          <td class="number">${formatPercent(l.avg_open_rate)}</td>
+          <td class="number">${formatNumber(l.total_paid_subs)}</td>
+          <td class="number">${formatNumber(l.total_likes)}</td>
+        </tr>
+      `).join('');
+    }
+
+    // Render articles table
+    function renderArticlesTable() {
+      const listLabels = {
+        'persuasion': 'Persuasion',
+        'ym': 'YM',
+        'bookstack': 'Bookstack',
+        'frankly_fukuyama': 'Frankly F.',
+        'american_purpose': 'American P.'
+      };
+
+      const sorted = [...articles].sort((a, b) => {
+        let aVal = a[sortField] || '';
+        let bVal = b[sortField] || '';
+        if (typeof aVal === 'string') {
+          return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        }
+        return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
+      });
+
+      const avgViews = summary?.totalStats?.avg_views || 0;
+      const tbody = document.querySelector('#articles-table tbody');
+      tbody.innerHTML = sorted.map(a => {
+        const viewsClass = a.views >= avgViews ? 'above-avg' : 'below-avg';
+        const listName = a.list_name || 'persuasion';
+        return `
+          <tr class="article-row" onclick="toggleDetails(${a.id})">
+            <td>${a.title.substring(0, 50)}${a.title.length > 50 ? '...' : ''}</td>
+            <td>${a.author || '-'}</td>
+            <td>${a.published_date || '-'}</td>
+            <td><span class="list-badge list-${listName}">${listLabels[listName] || listName}</span></td>
+            <td class="number ${viewsClass}">${formatNumber(a.views)}</td>
+            <td class="number">${formatNumber(a.likes)}</td>
+            <td class="number">${formatPercent(a.open_rate)}</td>
+            <td class="number">${formatNumber(a.new_paid_subs)}</td>
+          </tr>
+          <tr class="article-details" id="details-${a.id}">
+            <td colspan="8">
+              <div class="detail-grid">
+                <div class="detail-item"><label>Source</label><div class="val">${a.source === 'ym' ? 'YM Substack' : 'Persuasion'}</div></div>
+                <div class="detail-item"><label>Type</label><div class="val">${a.article_type || 'article'}</div></div>
+                ${a.access_type && a.access_type !== 'free' ? `<div class="detail-item"><label>Access</label><div class="val">${a.access_type}</div></div>` : ''}
+                ${a.recipients > 0 ? `<div class="detail-item"><label>Recipients</label><div class="val">${formatNumber(a.recipients)}</div></div>` : ''}
+                ${a.engagement_rate > 0 ? `<div class="detail-item"><label>Engagement Rate</label><div class="val">${formatPercent(a.engagement_rate)}</div></div>` : ''}
+                ${a.click_through_rate > 0 ? `<div class="detail-item"><label>CTR</label><div class="val">${formatPercent(a.click_through_rate)}</div></div>` : ''}
+                ${a.new_free_subs > 0 ? `<div class="detail-item"><label>Free Subs</label><div class="val">${formatNumber(a.new_free_subs)}</div></div>` : ''}
+                ${a.shares > 0 ? `<div class="detail-item"><label>Shares</label><div class="val">${formatNumber(a.shares)}</div></div>` : ''}
+                ${a.comments > 0 ? `<div class="detail-item"><label>Comments</label><div class="val">${formatNumber(a.comments)}</div></div>` : ''}
+              </div>
+              <button style="margin-top: 1rem; padding: 0.5rem 1rem; background: #1a365d; color: white; border: none; border-radius: 4px; cursor: pointer;" onclick="event.stopPropagation(); openEditModal(${a.id})">Edit</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      // Update sort indicators
+      document.querySelectorAll('#articles-table th').forEach(th => {
+        th.classList.remove('sorted');
+        if (th.dataset.sort === sortField) {
+          th.classList.add('sorted');
+          th.textContent = th.textContent.replace(/ [▲▼]$/, '') + (sortDir === 'asc' ? ' ▲' : ' ▼');
+        } else {
+          th.textContent = th.textContent.replace(/ [▲▼]$/, '');
+        }
+      });
+    }
+
+    // Toggle article details
+    function toggleDetails(id) {
+      const row = document.getElementById(`details-${id}`);
+      row.classList.toggle('show');
+    }
+
+    // Sorting
+    document.querySelectorAll('#articles-table th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const field = th.dataset.sort;
+        if (sortField === field) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortField = field;
+          sortDir = 'desc';
+        }
+        renderArticlesTable();
+      });
+    });
+
+    // Edit modal
+    function openEditModal(id) {
+      const article = articles.find(a => a.id === id);
+      if (!article) return;
+
+      document.getElementById('edit-id').value = id;
+      document.getElementById('edit-date').value = article.published_date || '';
+      document.getElementById('edit-source').value = article.source || 'ym';
+      document.getElementById('edit-list').value = article.list_name || 'persuasion';
+      document.getElementById('edit-author').value = article.author || '';
+      document.getElementById('edit-views').value = article.views || 0;
+      document.getElementById('edit-open-rate').value = (article.open_rate * 100).toFixed(2);
+      document.getElementById('edit-paid-subs').value = article.new_paid_subs || 0;
+      document.getElementById('edit-free-subs').value = article.new_free_subs || 0;
+      document.getElementById('edit-type').value = article.article_type || 'article';
+      document.getElementById('edit-access').value = article.access_type || 'free';
+
+      document.getElementById('edit-modal').classList.remove('hidden');
+    }
+
+    function closeEditModal() {
+      document.getElementById('edit-modal').classList.add('hidden');
+    }
+
+    async function saveArticle() {
+      const id = document.getElementById('edit-id').value;
+      const data = {
+        published_date: document.getElementById('edit-date').value,
+        source: document.getElementById('edit-source').value,
+        list_name: document.getElementById('edit-list').value,
+        author: document.getElementById('edit-author').value || null,
+        views: parseInt(document.getElementById('edit-views').value) || 0,
+        open_rate: parseFloat(document.getElementById('edit-open-rate').value) / 100 || 0,
+        new_paid_subs: parseInt(document.getElementById('edit-paid-subs').value) || 0,
+        new_free_subs: parseInt(document.getElementById('edit-free-subs').value) || 0,
+        article_type: document.getElementById('edit-type').value,
+        access_type: document.getElementById('edit-access').value
+      };
+
+      try {
+        const res = await fetch(`/api/article-analytics/articles/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        if (res.ok) {
+          closeEditModal();
+          loadData();
+        } else {
+          alert('Error saving article');
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+
+    async function deleteArticle() {
+      if (!confirm('Are you sure you want to delete this article?')) return;
+      const id = document.getElementById('edit-id').value;
+
+      try {
+        const res = await fetch(`/api/article-analytics/articles/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          closeEditModal();
+          loadData();
+        } else {
+          alert('Error deleting article');
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+
+    // Import CSV
+    async function importCsv(source) {
+      const textarea = document.getElementById(source === 'ym' ? 'ym-csv' : 'persuasion-csv');
+      const csvData = textarea.value.trim();
+      if (!csvData) {
+        alert('Please paste CSV data first');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/article-analytics/import/csv', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvData, source })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Imported ${data.imported} articles, skipped ${data.skipped}`);
+          textarea.value = '';
+          loadData();
+        } else {
+          alert('Error: ' + data.error);
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+
+    // Sync from Substack
+    async function syncFromSubstack() {
+      const btn = document.getElementById('sync-btn');
+      const output = document.getElementById('sync-output');
+      btn.disabled = true;
+      output.classList.add('show');
+      output.textContent = 'Starting sync...\n';
+
+      try {
+        const response = await fetch('/api/article-analytics/sync', { method: 'POST' });
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value);
+          const lines = text.split('\n').filter(l => l.startsWith('data: '));
+          for (const line of lines) {
+            try {
+              const data = JSON.parse(line.substring(6));
+              output.textContent += data.message + '\n';
+              output.scrollTop = output.scrollHeight;
+              if (data.status === 'complete' || data.status === 'error') {
+                btn.disabled = false;
+                if (data.status === 'complete') loadData();
+              }
+            } catch (e) {}
+          }
+        }
+      } catch (err) {
+        output.textContent += 'Error: ' + err.message + '\n';
+        btn.disabled = false;
+      }
+    }
+
+    // Filter change handlers
+    document.getElementById('source-filter').addEventListener('change', () => {
+      updateFilterVisibility();
+      loadData();
+    });
+    document.getElementById('list-filter').addEventListener('change', loadData);
+    document.getElementById('type-filter').addEventListener('change', loadData);
+    document.getElementById('access-filter').addEventListener('change', loadData);
+    document.getElementById('days-filter').addEventListener('change', loadData);
+
+    // Initial setup
+    updateFilterVisibility();
+    loadData();
+  </script>
+</body>
+</html>
