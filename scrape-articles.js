@@ -1,7 +1,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { createClient } = require('@libsql/client');
+const { createClient } = require('@libsql/client/http');
 require('dotenv').config();
 
 // Configuration

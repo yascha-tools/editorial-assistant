@@ -4,7 +4,7 @@ const cookieSession = require('cookie-session');
 const cheerio = require('cheerio');
 const path = require('path');
 const fs = require('fs');
-const { createClient } = require('@libsql/client');
+const { createClient } = require('@libsql/client/http');
 require('dotenv').config();
 
 // ==================== TURSO DATABASE SETUP ====================
@@ -14,7 +14,7 @@ let db = null;
 async function initDatabase() {
   // Create Turso client
   db = createClient({
-    url: process.env.TURSO_DATABASE_URL || 'file:local.db',
+    url: process.env.TURSO_DATABASE_URL,
     authToken: process.env.TURSO_AUTH_TOKEN
   });
 
