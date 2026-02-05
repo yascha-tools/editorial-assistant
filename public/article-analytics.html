@@ -255,7 +255,7 @@
         <option value="frankly_fukuyama">Frankly Fukuyama</option>
         <option value="american_purpose">American Purpose</option>
       </select>
-      <select id="type-filter" class="hidden">
+      <select id="type-filter">
         <option value="all">All Types</option>
         <option value="article">Articles</option>
         <option value="podcast">Podcasts</option>
@@ -346,7 +346,7 @@
       <div class="section">
         <h2>Performance by Source</h2>
         <table id="source-table">
-          <thead><tr><th>Source</th><th class="number">Articles</th><th class="number">Avg Views</th><th class="number">Avg Open Rate</th><th class="number">New Paid Subs</th></tr></thead>
+          <thead><tr><th>Source</th><th class="number">Articles</th><th class="number">Avg Views</th><th class="number">Avg Open Rate</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -354,7 +354,7 @@
       <div class="section">
         <h2>Performance by List</h2>
         <table id="list-table">
-          <thead><tr><th>List</th><th class="number">Articles</th><th class="number">Avg Views</th><th class="number">Avg Open Rate</th><th class="number">New Paid Subs</th><th class="number">Likes</th></tr></thead>
+          <thead><tr><th>List</th><th class="number">Articles</th><th class="number">Avg Views</th><th class="number">Avg Open Rate</th><th class="number">Likes</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -379,26 +379,31 @@
           </thead>
           <tbody></tbody>
         </table>
+        <div id="pagination" style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin-top: 1rem; padding: 1rem 0;"></div>
       </div>
     </div>
 
     <!-- Import Tab -->
     <div class="tab-content" id="import">
       <div class="section">
-        <h2>Sync from Substack</h2>
-        <p style="color: #666; margin-bottom: 1rem;">Automatically scrape article data from YM Substack and Persuasion.</p>
-        <button id="sync-btn" onclick="syncFromSubstack()">Sync Now</button>
-        <div class="sync-output" id="sync-output"></div>
+        <h2>Data Update Instructions</h2>
+        <div style="background: #e8f4fd; border: 1px solid #b8daff; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem;">
+          <p style="color: #004085; margin-bottom: 1rem; font-weight: 600;">Data is stored in Turso cloud database and shared across all team members.</p>
+          <p style="color: #004085; margin-bottom: 0.5rem;">To update data, run the scraper locally on your Mac:</p>
+          <pre style="background: #1a1a1a; color: #0f0; padding: 1rem; border-radius: 4px; font-family: monospace; margin: 1rem 0;">cd /Users/yaschamounk/editorial-assistant
+node scrape-articles.js --pages 5</pre>
+          <p style="color: #666; font-size: 0.9rem;">The scraper will automatically update the cloud database. Changes will be visible to all team members immediately.</p>
+        </div>
       </div>
 
       <div class="import-section">
-        <h3>Import YM Substack CSV</h3>
+        <h3>Import YM Substack CSV (Manual)</h3>
         <textarea id="ym-csv" placeholder="Paste CSV data here (title,date,views,open_rate,paid_subs,free_subs,revenue)"></textarea>
         <button onclick="importCsv('ym')">Import YM Data</button>
       </div>
 
       <div class="import-section">
-        <h3>Import Persuasion CSV</h3>
+        <h3>Import Persuasion CSV (Manual)</h3>
         <textarea id="persuasion-csv" placeholder="Paste CSV data here (title,date,views,open_rate,paid_subs,free_subs,revenue)"></textarea>
         <button onclick="importCsv('persuasion')">Import Persuasion Data</button>
       </div>
@@ -466,6 +471,9 @@
     let weeklyChart = null;
     let sortField = 'published_date';
     let sortDir = 'desc';
+    let currentPage = 1;
+    let totalPages = 1;
+    let totalArticles = 0;
 
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
@@ -501,16 +509,16 @@
       const listFilter = document.getElementById('list-filter');
       const typeFilter = document.getElementById('type-filter');
 
+      // Type filter is always visible
+      typeFilter.classList.remove('hidden');
+
       if (source === 'ym') {
-        // For YM Substack, show type filter (Articles/Podcasts) instead of list filter
+        // For YM Substack, hide list filter (not applicable)
         listFilter.classList.add('hidden');
-        typeFilter.classList.remove('hidden');
-        listFilter.value = 'all'; // Reset list filter
+        listFilter.value = 'all';
       } else {
         // For Persuasion or All Sources, show list filter
         listFilter.classList.remove('hidden');
-        typeFilter.classList.add('hidden');
-        typeFilter.value = 'all'; // Reset type filter
       }
     }
 
@@ -522,19 +530,18 @@
       const articleType = document.getElementById('type-filter').value;
       const accessType = document.getElementById('access-filter').value;
 
+      // Fetch summary and metadata first (fast, aggregate queries)
       try {
-        const [articlesRes, summaryRes, metadataRes] = await Promise.all([
-          fetch(`/api/article-analytics/articles?source=${source}&list_name=${listName}&article_type=${articleType}&access_type=${accessType}`),
+        const [summaryRes, metadataRes] = await Promise.all([
           fetch(`/api/article-analytics/summary?days=${days}&source=${source}&list_name=${listName}&article_type=${articleType}&access_type=${accessType}`),
           fetch('/api/article-analytics/import-metadata')
         ]);
 
-        if (articlesRes.status === 401) {
+        if (summaryRes.status === 401) {
           window.location.href = '/article-analytics/login';
           return;
         }
 
-        articles = (await articlesRes.json()).articles || [];
         summary = await summaryRes.json();
         const metadata = await metadataRes.json();
 
@@ -545,9 +552,32 @@
         renderTopBottom();
         renderSourceTable();
         renderListTable();
-        renderArticlesTable();
       } catch (err) {
         console.error('Load error:', err);
+      }
+
+      // Fetch articles separately (paginated to avoid timeout)
+      currentPage = 1;
+      await loadArticles();
+    }
+
+    async function loadArticles() {
+      const source = document.getElementById('source-filter').value;
+      const listName = document.getElementById('list-filter').value;
+      const articleType = document.getElementById('type-filter').value;
+      const accessType = document.getElementById('access-filter').value;
+
+      try {
+        const res = await fetch(`/api/article-analytics/articles?source=${source}&list_name=${listName}&article_type=${articleType}&access_type=${accessType}&page=${currentPage}&limit=50`);
+        if (res.status === 401) return;
+        const data = await res.json();
+        articles = data.articles || [];
+        totalPages = data.totalPages || 1;
+        totalArticles = data.total || 0;
+        renderArticlesTable();
+        renderPagination();
+      } catch (err) {
+        console.error('Articles load error:', err);
       }
     }
 
@@ -699,7 +729,6 @@
           <td class="number">${s.count}</td>
           <td class="number">${formatNumber(s.avg_views)}</td>
           <td class="number">${formatPercent(s.avg_open_rate)}</td>
-          <td class="number">${formatNumber(s.total_paid_subs)}</td>
         </tr>
       `).join('');
     }
@@ -721,7 +750,6 @@
           <td class="number">${l.count}</td>
           <td class="number">${formatNumber(l.avg_views)}</td>
           <td class="number">${formatPercent(l.avg_open_rate)}</td>
-          <td class="number">${formatNumber(l.total_paid_subs)}</td>
           <td class="number">${formatNumber(l.total_likes)}</td>
         </tr>
       `).join('');
@@ -791,6 +819,27 @@
           th.textContent = th.textContent.replace(/ [▲▼]$/, '');
         }
       });
+    }
+
+    function renderPagination() {
+      const container = document.getElementById('pagination');
+      if (totalPages <= 1) {
+        container.innerHTML = `<span style="color: #666;">${totalArticles} articles</span>`;
+        return;
+      }
+      let html = `<span style="color: #666;">${totalArticles} articles</span>`;
+      html += `<button onclick="goToPage(1)" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.4rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: white; cursor: pointer;">First</button>`;
+      html += `<button onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''} style="padding: 0.4rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: white; cursor: pointer;">Prev</button>`;
+      html += `<span>Page ${currentPage} of ${totalPages}</span>`;
+      html += `<button onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.4rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: white; cursor: pointer;">Next</button>`;
+      html += `<button onclick="goToPage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''} style="padding: 0.4rem 0.8rem; border: 1px solid #ccc; border-radius: 4px; background: white; cursor: pointer;">Last</button>`;
+      container.innerHTML = html;
+    }
+
+    function goToPage(page) {
+      if (page < 1 || page > totalPages) return;
+      currentPage = page;
+      loadArticles();
     }
 
     // Toggle article details
@@ -911,42 +960,6 @@
         }
       } catch (err) {
         alert('Error: ' + err.message);
-      }
-    }
-
-    // Sync from Substack
-    async function syncFromSubstack() {
-      const btn = document.getElementById('sync-btn');
-      const output = document.getElementById('sync-output');
-      btn.disabled = true;
-      output.classList.add('show');
-      output.textContent = 'Starting sync...\n';
-
-      try {
-        const response = await fetch('/api/article-analytics/sync', { method: 'POST' });
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const text = decoder.decode(value);
-          const lines = text.split('\n').filter(l => l.startsWith('data: '));
-          for (const line of lines) {
-            try {
-              const data = JSON.parse(line.substring(6));
-              output.textContent += data.message + '\n';
-              output.scrollTop = output.scrollHeight;
-              if (data.status === 'complete' || data.status === 'error') {
-                btn.disabled = false;
-                if (data.status === 'complete') loadData();
-              }
-            } catch (e) {}
-          }
-        }
-      } catch (err) {
-        output.textContent += 'Error: ' + err.message + '\n';
-        btn.disabled = false;
       }
     }
 

@@ -1,12 +1,12 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const initSqlJs = require('sql.js');
+const { createClient } = require('@libsql/client');
+require('dotenv').config();
 
 // Configuration
 const OUTPUT_FILE_YM = path.join(__dirname, 'data', 'ym-articles.csv');
 const OUTPUT_FILE_PERSUASION = path.join(__dirname, 'data', 'persuasion-articles.csv');
-const DB_PATH = path.join(__dirname, 'data', 'articles.db');
 
 // Parse command-line arguments
 const args = process.argv.slice(2);
@@ -500,22 +500,18 @@ function saveToCSV(articles, outputFile) {
   console.log(`📁 Saved to: ${outputFile}`);
 }
 
-// Import articles into database
+// Import articles into Turso cloud database
 async function importToDatabase(articles, source) {
-  console.log(`📥 Importing ${articles.length} articles to database (source: ${source})...`);
+  console.log(`📥 Importing ${articles.length} articles to Turso database (source: ${source})...`);
 
-  const SQL = await initSqlJs();
-  let db;
-
-  if (fs.existsSync(DB_PATH)) {
-    const fileBuffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(fileBuffer);
-  } else {
-    db = new SQL.Database();
-  }
+  // Create Turso client
+  const db = createClient({
+    url: process.env.TURSO_DATABASE_URL || 'file:local.db',
+    authToken: process.env.TURSO_AUTH_TOKEN
+  });
 
   // Create table if it doesn't exist (with new columns)
-  db.run(`CREATE TABLE IF NOT EXISTS articles (
+  await db.execute(`CREATE TABLE IF NOT EXISTS articles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     published_date TEXT NOT NULL,
@@ -541,15 +537,27 @@ async function importToDatabase(articles, source) {
   )`);
 
   // Add new columns if they don't exist (for existing databases)
-  try { db.run(`ALTER TABLE articles ADD COLUMN list_name TEXT DEFAULT 'persuasion'`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN likes INTEGER DEFAULT 0`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN comments INTEGER DEFAULT 0`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN original_source TEXT`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN access_type TEXT DEFAULT 'free'`); } catch (e) { /* column exists */ }
+  const alterStatements = [
+    `ALTER TABLE articles ADD COLUMN list_name TEXT DEFAULT 'persuasion'`,
+    `ALTER TABLE articles ADD COLUMN likes INTEGER DEFAULT 0`,
+    `ALTER TABLE articles ADD COLUMN comments INTEGER DEFAULT 0`,
+    `ALTER TABLE articles ADD COLUMN original_source TEXT`,
+    `ALTER TABLE articles ADD COLUMN access_type TEXT DEFAULT 'free'`
+  ];
+  for (const stmt of alterStatements) {
+    try { await db.execute(stmt); } catch (e) { /* column exists */ }
+  }
 
   // Create indexes
-  try { db.run(`CREATE INDEX IF NOT EXISTS idx_articles_list ON articles(list_name)`); } catch (e) { /* index exists */ }
-  try { db.run(`CREATE INDEX IF NOT EXISTS idx_articles_access ON articles(access_type)`); } catch (e) { /* index exists */ }
+  try { await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_list ON articles(list_name)`); } catch (e) { /* index exists */ }
+  try { await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_access ON articles(access_type)`); } catch (e) { /* index exists */ }
+
+  // Create import metadata table
+  await db.execute(`CREATE TABLE IF NOT EXISTS article_import_metadata (
+    source TEXT PRIMARY KEY,
+    last_updated TEXT,
+    records_count INTEGER DEFAULT 0
+  )`);
 
   let imported = 0;
   let skippedYmDupes = 0;
@@ -594,10 +602,11 @@ async function importToDatabase(articles, source) {
       const articleType = article.article_type || 'article';
       const accessType = article.access_type || 'free';
 
-      db.run(`INSERT OR REPLACE INTO articles
-        (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, author, list_name, article_type, access_type, likes, comments, original_source, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-        [
+      await db.execute({
+        sql: `INSERT OR REPLACE INTO articles
+          (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, author, list_name, article_type, access_type, likes, comments, original_source, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        args: [
           article.title,
           article.date || '',
           source,
@@ -614,7 +623,7 @@ async function importToDatabase(articles, source) {
           comments,
           originalSource
         ]
-      );
+      });
       imported++;
     } catch (e) {
       // Skip duplicates or errors
@@ -622,13 +631,17 @@ async function importToDatabase(articles, source) {
     }
   }
 
-  // Save database
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(DB_PATH, buffer);
-  db.close();
+  // Update import metadata
+  await db.execute({
+    sql: `INSERT INTO article_import_metadata (source, last_updated, records_count)
+          VALUES (?, datetime('now'), ?)
+          ON CONFLICT(source) DO UPDATE SET
+            last_updated = datetime('now'),
+            records_count = ?`,
+    args: [source, imported, imported]
+  });
 
-  console.log(`✅ Imported ${imported} articles to database`);
+  console.log(`✅ Imported ${imported} articles to Turso database`);
   if (skippedYmDupes > 0) {
     console.log(`   ℹ️  Skipped ${skippedYmDupes} YM duplicates (will be imported from YM Substack)`);
   }

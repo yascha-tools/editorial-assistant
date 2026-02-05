@@ -4,32 +4,22 @@ const cookieSession = require('cookie-session');
 const cheerio = require('cheerio');
 const path = require('path');
 const fs = require('fs');
-const initSqlJs = require('sql.js');
+const { createClient } = require('@libsql/client');
 require('dotenv').config();
 
-// ==================== ARTICLE ANALYTICS DATABASE SETUP ====================
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'articles.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
+// ==================== TURSO DATABASE SETUP ====================
 let db = null;
 
-// Initialize database asynchronously
+// Initialize Turso database connection
 async function initDatabase() {
-  const SQL = await initSqlJs();
-
-  // Load existing database or create new one
-  if (fs.existsSync(dbPath)) {
-    const fileBuffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(fileBuffer);
-  } else {
-    db = new SQL.Database();
-  }
+  // Create Turso client
+  db = createClient({
+    url: process.env.TURSO_DATABASE_URL || 'file:local.db',
+    authToken: process.env.TURSO_AUTH_TOKEN
+  });
 
   // Initialize articles analytics tables
-  db.run(`
+  await db.execute(`
     CREATE TABLE IF NOT EXISTS articles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
@@ -63,20 +53,25 @@ async function initDatabase() {
   `);
 
   // Add new columns if they don't exist (for existing databases)
-  try { db.run(`ALTER TABLE articles ADD COLUMN list_name TEXT DEFAULT 'persuasion'`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN likes INTEGER DEFAULT 0`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN comments INTEGER DEFAULT 0`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN original_source TEXT`); } catch (e) { /* column exists */ }
-  try { db.run(`ALTER TABLE articles ADD COLUMN access_type TEXT DEFAULT 'free'`); } catch (e) { /* column exists */ }
+  const alterStatements = [
+    `ALTER TABLE articles ADD COLUMN list_name TEXT DEFAULT 'persuasion'`,
+    `ALTER TABLE articles ADD COLUMN likes INTEGER DEFAULT 0`,
+    `ALTER TABLE articles ADD COLUMN comments INTEGER DEFAULT 0`,
+    `ALTER TABLE articles ADD COLUMN original_source TEXT`,
+    `ALTER TABLE articles ADD COLUMN access_type TEXT DEFAULT 'free'`
+  ];
+  for (const stmt of alterStatements) {
+    try { await db.execute(stmt); } catch (e) { /* column exists */ }
+  }
 
-  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_date ON articles(published_date)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_type ON articles(article_type)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_list ON articles(list_name)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_articles_access ON articles(access_type)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_date ON articles(published_date)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_source ON articles(source)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_type ON articles(article_type)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_list ON articles(list_name)`);
+  await db.execute(`CREATE INDEX IF NOT EXISTS idx_articles_access ON articles(access_type)`);
 
   // Import metadata table
-  db.run(`
+  await db.execute(`
     CREATE TABLE IF NOT EXISTS article_import_metadata (
       source TEXT PRIMARY KEY,
       last_updated TEXT,
@@ -84,30 +79,15 @@ async function initDatabase() {
     )
   `);
 
-  saveDatabase();
-  console.log('Article analytics database initialized');
-}
-
-// Save database to file
-function saveDatabase() {
-  if (!db) return;
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
+  console.log('Turso database connected and initialized');
 }
 
 // Helper: run query and return all rows as array of objects
-function dbAll(sql, params = []) {
+async function dbAll(sql, params = []) {
   if (!db) return [];
   try {
-    const stmt = db.prepare(sql);
-    if (params.length > 0) stmt.bind(params);
-    const results = [];
-    while (stmt.step()) {
-      results.push(stmt.getAsObject());
-    }
-    stmt.free();
-    return results;
+    const result = await db.execute({ sql, args: params });
+    return result.rows;
   } catch (e) {
     console.error('DB query error:', e.message);
     return [];
@@ -115,18 +95,17 @@ function dbAll(sql, params = []) {
 }
 
 // Helper: run query and return first row
-function dbGet(sql, params = []) {
-  const results = dbAll(sql, params);
+async function dbGet(sql, params = []) {
+  const results = await dbAll(sql, params);
   return results.length > 0 ? results[0] : null;
 }
 
 // Helper: run query (INSERT/UPDATE/DELETE)
-function dbRun(sql, params = []) {
+async function dbRun(sql, params = []) {
   if (!db) return { changes: 0 };
   try {
-    db.run(sql, params);
-    saveDatabase();
-    return { changes: db.getRowsModified() };
+    const result = await db.execute({ sql, args: params });
+    return { changes: result.rowsAffected };
   } catch (e) {
     console.error('DB run error:', e.message);
     return { changes: 0 };
@@ -134,8 +113,8 @@ function dbRun(sql, params = []) {
 }
 
 // Helper to update import metadata
-function updateArticleImportMetadata(source, recordsCount) {
-  dbRun(`
+async function updateArticleImportMetadata(source, recordsCount) {
+  await dbRun(`
     INSERT INTO article_import_metadata (source, last_updated, records_count)
     VALUES (?, datetime('now'), ?)
     ON CONFLICT(source) DO UPDATE SET
@@ -1267,14 +1246,17 @@ app.post('/api/regenerate-social', async (req, res) => {
 
 // ==================== ARTICLE ANALYTICS API ENDPOINTS ====================
 
-// Get all articles
-app.get('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, res) => {
+// Get articles (paginated to avoid Turso timeout with large datasets)
+app.get('/api/article-analytics/articles', requireArticleAnalyticsAuth, async (req, res) => {
   try {
     const source = req.query.source || 'all';
     const listName = req.query.list_name || 'all';
     const articleType = req.query.article_type || 'all';
     const accessType = req.query.access_type || 'all';
-    let query = `SELECT * FROM articles`;
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 50);
+    const offset = (page - 1) * limit;
+
     const conditions = [];
     const params = [];
 
@@ -1298,20 +1280,26 @@ app.get('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, re
       params.push(accessType);
     }
 
-    if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(' AND ')}`;
-    }
+    const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
 
-    query += ` ORDER BY published_date DESC`;
-    const articles = dbAll(query, params);
-    res.json({ articles });
+    // Get total count
+    const countResult = await dbGet(`SELECT COUNT(*) as total FROM articles${whereClause}`, params);
+    const total = countResult ? countResult.total : 0;
+
+    // Get paginated articles (select specific columns to avoid Turso timeout with SELECT *)
+    const articles = await dbAll(
+      `SELECT id, title, published_date, source, views, open_rate, new_paid_subs, canceled_paid_subs, new_free_subs, estimated_revenue, recipients, engagement_rate, click_through_rate, shares, article_type, access_type, author, list_name, likes, comments, original_source FROM articles${whereClause} ORDER BY published_date DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    res.json({ articles, total, page, limit, totalPages: Math.ceil(total / limit) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // Get analytics summary
-app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res) => {
+app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 90;
     const source = req.query.source || 'all';
@@ -1327,7 +1315,7 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
     let whereClause = `WHERE ${dateFilter} AND ${sourceFilter} AND ${listFilter} AND ${typeFilter} AND ${accessFilter}`;
 
     // Total stats
-    const totalStats = dbGet(`
+    const totalStats = await dbGet(`
       SELECT
         COUNT(*) as total_articles,
         COALESCE(SUM(views), 0) as total_views,
@@ -1341,7 +1329,7 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
     `);
 
     // Weekly data
-    const weeklyData = dbAll(`
+    const weeklyData = await dbAll(`
       SELECT
         strftime('%Y-%W', published_date) as week,
         COUNT(*) as article_count,
@@ -1356,7 +1344,7 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
     `);
 
     // Monthly data
-    const monthlyData = dbAll(`
+    const monthlyData = await dbAll(`
       SELECT
         strftime('%Y-%m', published_date) as month,
         COUNT(*) as article_count,
@@ -1370,28 +1358,28 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
     `);
 
     // Top 10 articles by views
-    const topArticles = dbAll(`
+    const topArticles = await dbAll(`
       SELECT * FROM articles ${whereClause}
       ORDER BY views DESC
       LIMIT 10
     `);
 
     // Bottom 10 articles by views (excluding 0)
-    const bottomArticles = dbAll(`
+    const bottomArticles = await dbAll(`
       SELECT * FROM articles ${whereClause} AND views > 0
       ORDER BY views ASC
       LIMIT 10
     `);
 
     // Latest 20 articles
-    const latestArticles = dbAll(`
+    const latestArticles = await dbAll(`
       SELECT * FROM articles ${whereClause}
       ORDER BY published_date DESC
       LIMIT 20
     `);
 
     // By article type
-    const byType = dbAll(`
+    const byType = await dbAll(`
       SELECT
         article_type,
         COUNT(*) as count,
@@ -1404,7 +1392,7 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
     `);
 
     // By source
-    const bySource = dbAll(`
+    const bySource = await dbAll(`
       SELECT
         source,
         COUNT(*) as count,
@@ -1420,7 +1408,7 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
     `);
 
     // By list
-    const byList = dbAll(`
+    const byList = await dbAll(`
       SELECT
         list_name,
         COUNT(*) as count,
@@ -1453,9 +1441,9 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, (req, res
 });
 
 // Get import metadata
-app.get('/api/article-analytics/import-metadata', requireArticleAnalyticsAuth, (req, res) => {
+app.get('/api/article-analytics/import-metadata', requireArticleAnalyticsAuth, async (req, res) => {
   try {
-    const metadata = dbAll(`SELECT source, last_updated, records_count FROM article_import_metadata`);
+    const metadata = await dbAll(`SELECT source, last_updated, records_count FROM article_import_metadata`);
     res.json(metadata);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1463,7 +1451,7 @@ app.get('/api/article-analytics/import-metadata', requireArticleAnalyticsAuth, (
 });
 
 // Import CSV data
-app.post('/api/article-analytics/import/csv', requireArticleAnalyticsAuth, (req, res) => {
+app.post('/api/article-analytics/import/csv', requireArticleAnalyticsAuth, async (req, res) => {
   const { csvData, source } = req.body;
 
   if (!csvData || !csvData.trim()) {
@@ -1550,7 +1538,7 @@ app.post('/api/article-analytics/import/csv', requireArticleAnalyticsAuth, (req,
       }
 
       try {
-        dbRun(`
+        await dbRun(`
           INSERT INTO articles (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, recipients, engagement_rate, shares)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(title, published_date, source) DO UPDATE SET
@@ -1565,7 +1553,7 @@ app.post('/api/article-analytics/import/csv', requireArticleAnalyticsAuth, (req,
       }
     }
 
-    updateArticleImportMetadata(source, imported);
+    await updateArticleImportMetadata(source, imported);
     res.json({ success: true, imported, skipped });
   } catch (error) {
     console.error('Import error:', error);
@@ -1574,7 +1562,7 @@ app.post('/api/article-analytics/import/csv', requireArticleAnalyticsAuth, (req,
 });
 
 // Add/Update article manually
-app.post('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, res) => {
+app.post('/api/article-analytics/articles', requireArticleAnalyticsAuth, async (req, res) => {
   const { title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, article_type, author } = req.body;
 
   if (!title || !published_date || !source) {
@@ -1582,7 +1570,7 @@ app.post('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, r
   }
 
   try {
-    dbRun(`
+    await dbRun(`
       INSERT INTO articles (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, article_type, author)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(title, published_date, source) DO UPDATE SET
@@ -1598,7 +1586,7 @@ app.post('/api/article-analytics/articles', requireArticleAnalyticsAuth, (req, r
 });
 
 // Update article
-app.put('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, (req, res) => {
+app.put('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { published_date, source, views, open_rate, new_paid_subs, canceled_paid_subs, new_free_subs, estimated_revenue, recipients, engagement_rate, click_through_rate, shares, article_type, access_type, author, list_name, likes, comments } = req.body;
@@ -1632,7 +1620,7 @@ app.put('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, (req
     updates.push('updated_at = datetime(\'now\')');
     params.push(id);
 
-    dbRun(`UPDATE articles SET ${updates.join(', ')} WHERE id = ?`, params);
+    await dbRun(`UPDATE articles SET ${updates.join(', ')} WHERE id = ?`, params);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1640,16 +1628,16 @@ app.put('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, (req
 });
 
 // Delete article
-app.delete('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, (req, res) => {
+app.delete('/api/article-analytics/articles/:id', requireArticleAnalyticsAuth, async (req, res) => {
   try {
-    dbRun('DELETE FROM articles WHERE id = ?', [req.params.id]);
+    await dbRun('DELETE FROM articles WHERE id = ?', [req.params.id]);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Sync from Substack (runs scraper)
+// Sync from Substack - now disabled since scraper runs locally with Turso
 app.post('/api/article-analytics/sync', requireArticleAnalyticsAuth, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1659,156 +1647,15 @@ app.post('/api/article-analytics/sync', requireArticleAnalyticsAuth, (req, res) 
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  const scraperPath = path.join(__dirname, 'scrape-articles.js');
-
-  if (!fs.existsSync(scraperPath)) {
-    sendEvent({ status: 'error', message: 'Scraper not found. Please create scrape-articles.js first.' });
-    res.end();
-    return;
-  }
-
-  sendEvent({ status: 'progress', message: 'Starting article scraper...' });
-
-  const { spawn } = require('child_process');
-  const scraper = spawn('node', [scraperPath], {
-    cwd: __dirname,
-    env: { ...process.env, PATH: process.env.PATH }
-  });
-
-  scraper.stdout.on('data', (data) => {
-    const lines = data.toString().split('\n').filter(l => l.trim());
-    lines.forEach(line => {
-      sendEvent({ status: 'progress', message: line });
-    });
-  });
-
-  scraper.stderr.on('data', (data) => {
-    sendEvent({ status: 'error', message: data.toString() });
-  });
-
-  scraper.on('close', async (code) => {
-    if (code === 0) {
-      sendEvent({ status: 'progress', message: 'Scraper finished. Importing data...' });
-
-      // Auto-import the CSV files
-      try {
-        const ymCsvPath = path.join(__dirname, 'data', 'ym-articles.csv');
-        const persuasionCsvPath = path.join(__dirname, 'data', 'persuasion-articles.csv');
-
-        if (fs.existsSync(ymCsvPath)) {
-          const ymCsv = fs.readFileSync(ymCsvPath, 'utf-8');
-          const ymResult = importArticleCsv(ymCsv, 'ym');
-          updateArticleImportMetadata('ym', ymResult.imported);
-          sendEvent({ status: 'progress', message: `YM: Imported ${ymResult.imported} articles` });
-        }
-
-        if (fs.existsSync(persuasionCsvPath)) {
-          const pCsv = fs.readFileSync(persuasionCsvPath, 'utf-8');
-          const pResult = importArticleCsv(pCsv, 'persuasion');
-          updateArticleImportMetadata('persuasion', pResult.imported);
-          sendEvent({ status: 'progress', message: `Persuasion: Imported ${pResult.imported} articles` });
-        }
-
-        sendEvent({ status: 'complete', message: 'Sync complete!' });
-      } catch (e) {
-        sendEvent({ status: 'error', message: `Import error: ${e.message}` });
-      }
-    } else {
-      sendEvent({ status: 'error', message: `Scraper exited with code ${code}` });
-    }
-    res.end();
-  });
+  sendEvent({ status: 'info', message: 'Server-side sync is disabled.' });
+  sendEvent({ status: 'info', message: 'Data is now stored in Turso cloud database.' });
+  sendEvent({ status: 'info', message: '' });
+  sendEvent({ status: 'info', message: 'To update data, run the scraper locally:' });
+  sendEvent({ status: 'info', message: '  cd /Users/yaschamounk/editorial-assistant' });
+  sendEvent({ status: 'info', message: '  node scrape-articles.js --pages 5' });
+  sendEvent({ status: 'complete', message: '' });
+  res.end();
 });
-
-// Helper function for importing article CSV (reusable)
-function importArticleCsv(csvData, source) {
-  const lines = csvData.trim().split('\n');
-  const header = lines[0].toLowerCase();
-  const cols = header.split(',').map(c => c.trim().replace(/"/g, ''));
-
-  const titleIdx = cols.findIndex(c => c.includes('title') || c.includes('post'));
-  const dateIdx = cols.findIndex(c => c.includes('date') || c.includes('published'));
-  const viewsIdx = cols.findIndex(c => c.includes('view'));
-  const openRateIdx = cols.findIndex(c => c.includes('open rate') || c.includes('open_rate'));
-  const paidSubsIdx = cols.findIndex(c => c.includes('paid sub') || c.includes('new paid'));
-  const freeSubsIdx = cols.findIndex(c => c.includes('free sub') || c.includes('new free'));
-  const revenueIdx = cols.findIndex(c => c.includes('revenue'));
-  const authorIdx = cols.findIndex(c => c === 'author');
-  const listNameIdx = cols.findIndex(c => c === 'list_name' || c.includes('list'));
-  const likesIdx = cols.findIndex(c => c === 'likes');
-  const commentsIdx = cols.findIndex(c => c === 'comments');
-  const articleTypeIdx = cols.findIndex(c => c === 'article_type');
-  const accessTypeIdx = cols.findIndex(c => c === 'access_type');
-
-  let imported = 0;
-  let skippedYmDupes = 0;
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const values = [];
-    let current = '';
-    let inQuotes = false;
-    for (const char of line) {
-      if (char === '"') inQuotes = !inQuotes;
-      else if (char === ',' && !inQuotes) { values.push(current.trim()); current = ''; }
-      else current += char;
-    }
-    values.push(current.trim());
-
-    const title = values[titleIdx]?.replace(/"/g, '');
-    if (!title) continue;
-
-    const dateStr = dateIdx >= 0 ? values[dateIdx]?.replace(/"/g, '') : null;
-    let publishedDate = dateStr;
-    if (dateStr) {
-      const parsed = new Date(dateStr);
-      if (!isNaN(parsed.getTime())) {
-        publishedDate = parsed.toISOString().split('T')[0];
-      }
-    }
-
-    const views = viewsIdx >= 0 ? parseNumber(values[viewsIdx]) : 0;
-    const openRate = openRateIdx >= 0 ? parsePercent(values[openRateIdx]) : 0;
-    const paidSubs = paidSubsIdx >= 0 ? parseNumber(values[paidSubsIdx]) : 0;
-    const freeSubs = freeSubsIdx >= 0 ? parseNumber(values[freeSubsIdx]) : 0;
-    const revenue = revenueIdx >= 0 ? parseNumber(values[revenueIdx]) : 0;
-    const author = authorIdx >= 0 ? values[authorIdx]?.replace(/"/g, '') : null;
-    const listName = listNameIdx >= 0 ? values[listNameIdx]?.replace(/"/g, '') : source;
-    const likes = likesIdx >= 0 ? parseNumber(values[likesIdx]) : 0;
-    const comments = commentsIdx >= 0 ? parseNumber(values[commentsIdx]) : 0;
-    const articleType = articleTypeIdx >= 0 ? values[articleTypeIdx]?.replace(/"/g, '') : 'article';
-    const accessType = accessTypeIdx >= 0 ? values[accessTypeIdx]?.replace(/"/g, '') : 'free';
-
-    // Skip YM duplicates when importing from Persuasion
-    if (source === 'persuasion' && listName === 'ym') {
-      skippedYmDupes++;
-      continue;
-    }
-
-    try {
-      dbRun(`
-        INSERT INTO articles (title, published_date, source, views, open_rate, new_paid_subs, new_free_subs, estimated_revenue, author, list_name, article_type, access_type, likes, comments, original_source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(title, published_date, source) DO UPDATE SET
-          views = ?, open_rate = ?, new_paid_subs = ?, new_free_subs = ?, estimated_revenue = ?,
-          author = COALESCE(?, author), list_name = COALESCE(?, list_name), article_type = COALESCE(?, article_type), access_type = COALESCE(?, access_type), likes = ?, comments = ?,
-          updated_at = datetime('now')
-      `, [title, publishedDate || new Date().toISOString().split('T')[0], source, views, openRate, paidSubs, freeSubs, revenue, author, listName, articleType, accessType, likes, comments, source,
-          views, openRate, paidSubs, freeSubs, revenue, author, listName, articleType, accessType, likes, comments]);
-      imported++;
-    } catch (e) {
-      // Skip errors
-    }
-  }
-
-  if (skippedYmDupes > 0) {
-    console.log(`   Skipped ${skippedYmDupes} YM duplicates from Persuasion import`);
-  }
-
-  return { imported };
-}
 
 // Initialize database and start server
 initDatabase().then(() => {
