@@ -144,6 +144,11 @@ const PORT = process.env.PORT || 3001;
 
 const anthropic = new Anthropic();
 
+// Model selection — the API has no floating "latest" alias, so versions are pinned here.
+// Update these two lines to swap model versions across the whole app.
+const MODEL_SONNET = 'claude-sonnet-4-6'; // bulk tasks: copy-edit, fact-check, flag-claims, social
+const MODEL_OPUS = 'claude-opus-4-8';     // premium tasks: headline/dek generation
+
 // Session middleware
 app.use(cookieSession({
   name: 'session',
@@ -519,7 +524,7 @@ async function processCopyEditChunked(text, styleGuide, sendProgress) {
   if (text.length <= CHUNK_THRESHOLD) {
     // Short article - process normally
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 16384,
       messages: [{ role: 'user', content: createCopyEditPrompt(text, styleGuide, 1) }]
     });
@@ -545,7 +550,7 @@ async function processCopyEditChunked(text, styleGuide, sendProgress) {
     const batchResults = await Promise.all(
       batch.map((chunk, idx) =>
         anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 8192,
           messages: [{ role: 'user', content: createCopyEditPrompt(chunk, styleGuide, startNums[idx]) }]
         }).then(r => r.content[0].text)
@@ -580,7 +585,7 @@ async function processFlagClaimsChunked(text, sendProgress) {
   if (text.length <= CHUNK_THRESHOLD) {
     // Short article - process normally
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 16384,
       messages: [{ role: 'user', content: createFlagClaimsPrompt(text) }]
     });
@@ -594,7 +599,7 @@ async function processFlagClaimsChunked(text, sendProgress) {
   const batchResults = await Promise.all(
     chunks.map((chunk, idx) =>
       anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 8192,
         messages: [{ role: 'user', content: createFlagClaimsPrompt(chunk) }]
       }).then(r => r.content[0].text)
@@ -803,7 +808,7 @@ ${articleText}`;
   if (text.length <= CHUNK_THRESHOLD) {
     // Short article - single extraction
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 4096,
       messages: [{ role: 'user', content: extractPrompt(text) }]
     });
@@ -820,7 +825,7 @@ ${articleText}`;
   const chunkResults = await Promise.all(
     chunks.map(async (chunk) => {
       const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
+        model: MODEL_SONNET,
         max_tokens: 2048,
         messages: [{ role: 'user', content: extractPrompt(chunk) }]
       });
@@ -874,7 +879,7 @@ async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfi
   if (!TAVILY_API_KEY) {
     sendProgress('factCheck', 'No web search API configured - using AI knowledge only...');
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 16384,
       messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
     });
@@ -891,7 +896,7 @@ async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfi
     console.error('Failed to extract claims:', e.message);
     // Fall back to regular fact-check
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 16384,
       messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
     });
@@ -901,7 +906,7 @@ async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfi
   if (claims.length === 0) {
     // No claims found, fall back to regular fact-check
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: MODEL_SONNET,
       max_tokens: 16384,
       messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
     });
@@ -975,7 +980,7 @@ async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfi
           const chunkPrompt = createVerifyPrompt(chunk, resultsToUse, today, idx + 1, chunkCount);
 
           const response = await anthropic.messages.create({
-            model: 'claude-sonnet-4-6',
+            model: MODEL_SONNET,
             max_tokens: 8192,
             messages: [{ role: 'user', content: chunkPrompt }]
           });
@@ -997,7 +1002,7 @@ async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfi
   const verifyPrompt = createVerifyPrompt(text, searchResults, today);
 
   const verifyResponse = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: MODEL_SONNET,
     max_tokens: 16384,
     messages: [{ role: 'user', content: verifyPrompt }]
   });
@@ -1093,7 +1098,7 @@ app.post('/api/process-stream', async (req, res) => {
       sendProgress('headlines', 'Generating headline suggestions...');
       promises.push(
         anthropic.messages.create({
-          model: 'claude-opus-4-8',
+          model: MODEL_OPUS,
           max_tokens: 2048,
           messages: [{ role: 'user', content: createHeadlinePrompt(text, styleGuides.headlines) }]
         }).then(response => {
@@ -1115,7 +1120,7 @@ app.post('/api/process-stream', async (req, res) => {
         sendProgress('social', `Generating ${platform} posts...`);
         promises.push(
           anthropic.messages.create({
-            model: 'claude-sonnet-4-6',
+            model: MODEL_SONNET,
             max_tokens: 2048,
             messages: [{ role: 'user', content: createSocialPrompt(text, platform, styleGuides.socialMedia) }]
           }).then(response => {
@@ -1198,7 +1203,7 @@ app.post('/api/regenerate-headlines', async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-8',
+      model: MODEL_OPUS,
       max_tokens: 2048,
       messages: [{ role: 'user', content: createHeadlinePrompt(text, styleGuide) }]
     });
@@ -1227,7 +1232,7 @@ app.post('/api/regenerate-social', async (req, res) => {
     await Promise.all(
       platforms.map(async (platform) => {
         const response = await anthropic.messages.create({
-          model: 'claude-sonnet-4-6',
+          model: MODEL_SONNET,
           max_tokens: 2048,
           messages: [{ role: 'user', content: createSocialPrompt(text, platform, styleGuide) }]
         });
