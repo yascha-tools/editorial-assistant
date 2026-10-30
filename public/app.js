@@ -1,767 +1,388 @@
-// Handle Cmd+A / Ctrl+A in output boxes to select just that box's content
+// Persuasion Editorial Assistant — front end
+const { api, stream, escapeHtml: esc, renderDoc, OptionsPanel, openRuleModal, copy } = window.Shared;
+const $ = id => document.getElementById(id);
+
+const PLATFORMS = {
+  substack: { label: 'Substack Notes', limit: 1500 },
+  twitter: { label: 'X', limit: 256 },
+  linkedin: { label: 'LinkedIn', limit: 1300 },
+  instagram: { label: 'Instagram', limit: 2200 },
+};
+
+// Cmd/Ctrl+A inside a result box selects just that box
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-    const activeEl = document.activeElement;
-    if (activeEl && activeEl.classList.contains('output-box')) {
+    const el = document.activeElement;
+    if (el && el.classList.contains('output-box')) {
       e.preventDefault();
       const range = document.createRange();
-      range.selectNodeContents(activeEl);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
     }
   }
 });
 
-// DOM elements
-const toggleStyleGuidesBtn = document.getElementById('toggle-style-guides');
-const styleGuidesPanel = document.getElementById('style-guides-panel');
-const headlinesGuide = document.getElementById('headlines-guide');
-const socialGuide = document.getElementById('social-guide');
-const copyeditGuide = document.getElementById('copyedit-guide');
-const factcheckGuide = document.getElementById('factcheck-guide');
-
-const docUrl = document.getElementById('doc-url');
-const fetchDocBtn = document.getElementById('fetch-doc-btn');
-const docStatus = document.getElementById('doc-status');
-const articleText = document.getElementById('article-text');
-
-const taskHeadlines = document.getElementById('task-headlines');
-const taskSocial = document.getElementById('task-social');
-const taskCopyedit = document.getElementById('task-copyedit');
-const taskFlagclaims = document.getElementById('task-flagclaims');
-const taskFactcheck = document.getElementById('task-factcheck');
-
-const processBtn = document.getElementById('process-btn');
-const loading = document.getElementById('loading');
-const loadingText = document.getElementById('loading-text');
-const error = document.getElementById('error');
-
-const resultsSection = document.getElementById('results');
-const headlinesSection = document.getElementById('headlines-section');
-const headlinesList = document.getElementById('headlines-list');
-const regenerateBtn = document.getElementById('regenerate-btn');
-
-const socialSection = document.getElementById('social-section');
-const socialContent = document.getElementById('social-content');
-const tabButtons = document.querySelectorAll('.tab-btn');
-const regenerateSocialBtn = document.getElementById('regenerate-social-btn');
-
-const copyeditSection = document.getElementById('copyedit-section');
-const copyeditOutput = document.getElementById('copyedit-output');
-const copyeditIssues = document.getElementById('copyedit-issues');
-const copyeditIssuesList = document.getElementById('copyedit-issues-list');
-
-const flagclaimsSection = document.getElementById('flagclaims-section');
-const flagclaimsOutput = document.getElementById('flagclaims-output');
-const flagclaimsListContainer = document.getElementById('flagclaims-list-container');
-const flagclaimsList = document.getElementById('flagclaims-list');
-
-const factcheckSection = document.getElementById('factcheck-section');
-const factcheckOutput = document.getElementById('factcheck-output');
-const factcheckClaims = document.getElementById('factcheck-claims');
-const factcheckClaimsList = document.getElementById('factcheck-claims-list');
-
-// State
-let socialData = { substack: [], twitter: [], instagram: [] };
-let currentPlatform = 'substack';
-
-// Load style guides
-async function loadStyleGuides() {
+// ---------------- Style guides ----------------
+const guideEls = { headlines: $('headlines-guide'), socialMedia: $('social-guide'), copyEdit: $('copyedit-guide'), factCheck: $('factcheck-guide') };
+const originalGuides = {};
+(async function loadStyleGuides() {
   try {
-    const response = await fetch('/api/style-guides');
-    const data = await response.json();
-    headlinesGuide.value = data.headlines || '';
-    socialGuide.value = data.socialMedia || '';
-    copyeditGuide.value = data.copyEdit || '';
-    factcheckGuide.value = data.factCheck || '';
-  } catch (err) {
-    console.error('Failed to load style guides:', err);
-  }
+    const data = await api('/api/style-guides');
+    for (const k of Object.keys(guideEls)) { guideEls[k].value = data[k] || ''; originalGuides[k] = data[k] || ''; }
+  } catch (err) { console.error('Failed to load style guides:', err); }
+})();
+// Only send a guide when the editor changed it this session
+function guideOverride(key) {
+  const v = guideEls[key].value;
+  return v !== originalGuides[key] ? v : undefined;
+}
+$('toggle-style-guides').addEventListener('click', () => {
+  $('style-guides-panel').classList.toggle('hidden');
+  $('toggle-style-guides').classList.toggle('active');
+});
+$('propose-rule-link').addEventListener('click', e => { e.preventDefault(); openRuleModal({}); });
+
+// ---------------- Article input ----------------
+const articleText = $('article-text');
+const titleInput = $('current-title');
+const dekInput = $('current-dek');
+let formattingSource = 'plain';
+let titleTouched = false;
+titleInput.addEventListener('input', () => { titleTouched = true; });
+
+function hasMarkup(text) {
+  return /(^|[^*\w])\*[^*\s][^*\n]*\*(?!\w)/.test(text) || /\[[^\]]+\]\(https?:\/\//.test(text);
+}
+function formattingFor(text) {
+  return formattingSource === 'rich' || hasMarkup(text) ? 'rich' : 'plain';
+}
+function guessTitle(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 3) return '';
+  const first = lines[0].replace(/^#+\s*/, '').replace(/[*_]/g, '');
+  return /^#\s/.test(lines[0]) || (first.split(/\s+/).length <= 20 && !/[.:;,]$/.test(first)) ? first : '';
+}
+function maybeFillTitle(title, dek) {
+  if (!titleTouched && !titleInput.value.trim() && title) titleInput.value = title;
+  if (dek && !dekInput.value.trim()) dekInput.value = dek;
 }
 
-loadStyleGuides();
-
-// Toggle style guides panel
-toggleStyleGuidesBtn.addEventListener('click', () => {
-  styleGuidesPanel.classList.toggle('hidden');
-  toggleStyleGuidesBtn.classList.toggle('active');
-});
-
-// Fetch Google Doc
-fetchDocBtn.addEventListener('click', async () => {
-  const url = docUrl.value.trim();
-  if (!url) {
-    docStatus.textContent = 'Please enter a URL';
-    docStatus.className = 'doc-status error';
-    return;
-  }
-
-  docStatus.textContent = 'Fetching document...';
-  docStatus.className = 'doc-status';
-  fetchDocBtn.disabled = true;
-
+$('fetch-doc-btn').addEventListener('click', async () => {
+  const url = $('doc-url').value.trim();
+  const status = $('doc-status');
+  if (!url) { status.textContent = 'Please enter a URL'; status.className = 'doc-status error'; return; }
+  status.textContent = 'Fetching document…';
+  status.className = 'doc-status';
+  $('fetch-doc-btn').disabled = true;
   try {
-    const response = await fetch('/api/fetch-doc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-
+    const data = await api('/api/fetch-doc', { url });
     articleText.value = data.content;
-    docStatus.textContent = 'Document loaded!';
-    docStatus.className = 'doc-status success';
+    formattingSource = 'rich';
+    titleTouched = false;
+    titleInput.value = data.title || '';
+    dekInput.value = data.subtitle || '';
+    status.textContent = 'Document loaded — italics and links preserved.';
+    status.className = 'doc-status success';
   } catch (err) {
-    docStatus.textContent = err.message;
-    docStatus.className = 'doc-status error';
+    status.textContent = err.message;
+    status.className = 'doc-status error';
   } finally {
-    fetchDocBtn.disabled = false;
+    $('fetch-doc-btn').disabled = false;
   }
 });
 
-// Social media tabs
-tabButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
-    tabButtons.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentPlatform = btn.dataset.platform;
-    renderSocialPosts();
-  });
+// Paste: convert rich clipboard content (Google Docs, Word, web pages) so
+// italics and links survive as *asterisks* and [text](url).
+articleText.addEventListener('paste', async (e) => {
+  const html = e.clipboardData?.getData('text/html');
+  if (!html) return;
+  e.preventDefault();
+  const plain = e.clipboardData.getData('text/plain');
+  const start = articleText.selectionStart, end = articleText.selectionEnd;
+  const wasEmpty = !articleText.value.trim();
+  let insert = plain;
+  try {
+    const data = await api('/api/convert-html', { html });
+    if (data.text && data.text.trim()) {
+      insert = data.text;
+      formattingSource = 'rich';
+      if (wasEmpty) maybeFillTitle(data.title || guessTitle(data.text));
+    }
+  } catch (_) { /* fall back to plain text */ }
+  articleText.setRangeText(insert, start, end, 'end');
+  articleText.dispatchEvent(new Event('input'));
+});
+articleText.addEventListener('input', () => {
+  if (!articleText.value.trim()) { formattingSource = 'plain'; return; }
+  maybeFillTitle(guessTitle(articleText.value));
 });
 
-function renderSocialPosts() {
-  const posts = socialData[currentPlatform] || [];
-  socialContent.innerHTML = posts.map((post, i) => `
-    <div class="social-post">
-      <p>${escapeHtml(post)}</p>
-      <button class="copy-btn secondary-btn" onclick="copyText('${escapeForOnclick(post)}')">Copy</button>
-    </div>
-  `).join('') || '<p style="color: #666;">No posts generated yet.</p>';
+function basePayload() {
+  return {
+    article: articleText.value.trim(),
+    currentTitle: titleInput.value.trim(),
+    currentDek: dekInput.value.trim(),
+    guidance: $('guidance').value.trim(),
+  };
 }
 
-// Copy function
-function copyText(text) {
-  navigator.clipboard.writeText(text).then(() => {
-    // Could add visual feedback here
+// ---------------- Headlines ----------------
+const headlinesPanel = new OptionsPanel({
+  root: $('headlines-panel'),
+  endpoint: '/api/headlines',
+  scope: 'headlines',
+  payload: () => ({ ...basePayload(), styleGuide: guideOverride('headlines') }),
+  renderOption: o => `<span class="headline-style">${esc(o.style)}</span><h3>${esc(o.headline)}</h3><p>${esc(o.dek)}</p>`,
+  copyItems: o => [{ label: 'Copy headline', text: o.headline }, { label: 'Copy dek', text: o.dek }, { label: 'Copy both', text: `${o.headline}\n\n${o.dek}` }],
+  describe: o => `${o.headline} — ${o.dek}`,
+});
+
+// ---------------- Social ----------------
+const socialPanels = {};
+let currentPlatform = 'substack';
+$('social-tabs').innerHTML = Object.entries(PLATFORMS).map(([k, p]) =>
+  `<button class="tab-btn ${k === currentPlatform ? 'active' : ''}" data-platform="${k}">${esc(p.label)}</button>`).join('');
+$('social-panels').innerHTML = Object.keys(PLATFORMS).map(k =>
+  `<div class="social-panel ${k === currentPlatform ? '' : 'hidden'}" id="social-panel-${k}"></div>`).join('');
+for (const [k, p] of Object.entries(PLATFORMS)) {
+  socialPanels[k] = new OptionsPanel({
+    root: $(`social-panel-${k}`),
+    endpoint: '/api/social',
+    scope: 'social',
+    extra: { platform: k },
+    payload: () => ({ ...basePayload(), styleGuide: guideOverride('socialMedia') }),
+    renderOption: o => `<p class="social-text">${esc(o.text).replace(/\n/g, '<br>')}</p><div class="char-count ${o.text.length > p.limit ? 'over' : ''}">${o.text.length} / ${p.limit} characters${k === 'twitter' ? ' (leaves room for the link)' : ''}</div>`,
+    copyItems: o => [{ label: 'Copy', text: o.text }],
+    describe: o => o.text,
   });
 }
+$('social-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  currentPlatform = btn.dataset.platform;
+  document.querySelectorAll('#social-tabs .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('.social-panel').forEach(el => el.classList.toggle('hidden', el.id !== `social-panel-${currentPlatform}`));
+});
 
-// Make copyText available globally
-window.copyText = copyText;
+// ---------------- Copy-edit ----------------
+let copyEdit = null; // { doc, issues, dismissed:Set }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+function renderCopyEdit() {
+  const { doc, issues, dismissed } = copyEdit;
+  const visible = issues.filter(i => !dismissed.has(i.id));
+  const highlights = visible.filter(i => i.start != null).map(i => ({
+    start: i.start, end: i.end, id: `ce${i.id}`, label: i.id,
+    cls: i.severity === 'error' ? 'ce-error' : 'ce-suggestion',
+    title: `${i.id}. “${i.quote}” → “${i.replacement}”\n${i.explanation}`,
+  }));
+  $('copyedit-doc').innerHTML = renderDoc(doc, highlights);
+  const item = i => `<li class="issue-item ${dismissed.has(i.id) ? 'dismissed' : ''}" id="ce-item-${i.id}" data-id="${i.id}">
+      <div class="issue-head"><span class="num">${i.id}</span><span class="cat">${esc(i.category.replace('_', ' '))}</span>${i.start == null ? '<span class="cat warn">not found in text</span>' : ''}</div>
+      <div class="issue-change"><span class="q">${esc(i.quote)}</span> → <span class="fix">${esc(i.replacement) || '<em>(delete)</em>'}</span></div>
+      <div class="expl">${esc(i.explanation)}</div>
+      <div class="item-actions">
+        <button class="mini-btn" data-act="copyfix">Copy fix</button>
+        <button class="mini-btn" data-act="dismiss">${dismissed.has(i.id) ? 'Restore' : 'Dismiss'}</button>
+        <button class="mini-btn" data-act="rule">Don't flag this again…</button>
+      </div></li>`;
+  const errors = issues.filter(i => i.severity === 'error');
+  const suggestions = issues.filter(i => i.severity !== 'error');
+  $('copyedit-errors').innerHTML = errors.map(item).join('') || '<li class="muted">No errors found.</li>';
+  $('copyedit-suggestions').innerHTML = suggestions.map(item).join('') || '<li class="muted">None.</li>';
+  $('copyedit-suggestion-count').textContent = `(${suggestions.length})`;
+  const nErr = errors.filter(i => !dismissed.has(i.id)).length;
+  $('copyedit-summary').textContent = `${nErr} error${nErr === 1 ? '' : 's'} and ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}. Highlights are on your original text — hover or click one to see the note.`;
 }
 
-function escapeForOnclick(text) {
-  return text.replace(/'/g, "\\'").replace(/\n/g, '\\n');
+async function runCopyEdit() {
+  $('copyedit-section').classList.remove('hidden');
+  $('copyedit-body').classList.add('hidden');
+  $('copyedit-status').innerHTML = '<span class="spinner"></span> Copy-editing…';
+  try {
+    const p = basePayload();
+    const data = await api('/api/copy-edit', { article: p.article, guidance: p.guidance, formatting: formattingFor(p.article), styleGuide: guideOverride('copyEdit') });
+    copyEdit = { ...data, dismissed: new Set() };
+    $('copyedit-status').textContent = formattingFor(p.article) === 'plain' ? 'Note: this text was pasted without formatting, so italics weren’t checked.' : '';
+    $('copyedit-body').classList.remove('hidden');
+    renderCopyEdit();
+  } catch (e) {
+    $('copyedit-status').innerHTML = `<span class="inline-error">Copy-edit failed: ${esc(e.message)}</span>`;
+  }
 }
 
-// Process article
-processBtn.addEventListener('click', async () => {
-  const text = articleText.value.trim();
-
-  if (!text) {
-    showError('Please enter article text');
+$('copyedit-section').addEventListener('click', e => {
+  const mark = e.target.closest('mark.hl, sup.hl-num');
+  if (mark) {
+    const id = mark.dataset.ids.split(' ')[0].replace('ce', '');
+    const li = $(`ce-item-${id}`);
+    if (li) { li.scrollIntoView({ behavior: 'smooth', block: 'center' }); li.classList.add('flash'); setTimeout(() => li.classList.remove('flash'), 1200); }
     return;
   }
+  const btn = e.target.closest('[data-act]');
+  const li = e.target.closest('.issue-item');
+  if (!btn || !li || !copyEdit) return;
+  const issue = copyEdit.issues.find(i => i.id === Number(li.dataset.id));
+  if (btn.dataset.act === 'copyfix') copy(issue.replacement, btn);
+  if (btn.dataset.act === 'dismiss') {
+    copyEdit.dismissed.has(issue.id) ? copyEdit.dismissed.delete(issue.id) : copyEdit.dismissed.add(issue.id);
+    renderCopyEdit();
+  }
+  if (btn.dataset.act === 'rule') {
+    openRuleModal({
+      scope: 'copyEdit',
+      text: `Don't flag ${issue.category.replace('_', ' ')} issues like “${issue.quote}” → “${issue.replacement}”: `,
+      context: `Flag the editor disagreed with: “${issue.quote}” → “${issue.replacement}” (${issue.explanation})`,
+    });
+  }
+});
+$('show-suggestions').addEventListener('change', e => $('copyedit-section').classList.toggle('hide-suggestions', !e.target.checked));
 
+// ---------------- Fact-check ----------------
+let fc = null; // { doc, claims: Map, results: Map, final }
+const SEVERITY = { incorrect: 0, imprecise: 1, unsupported: 2 };
+const VERDICT_LABEL = { incorrect: 'Incorrect', imprecise: 'Imprecise', unsupported: 'Unsupported', correct: 'Correct', opinion: 'Opinion' };
+
+function fcItem(c, r, { compact = false } = {}) {
+  const verdict = r ? r.verdict : 'pending';
+  const legal = (r && r.legal_sensitivity) || c.legal_sensitivity;
+  const sources = r && r.sources && r.sources.length
+    ? `<div class="sources">${r.sources.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.url)}</a>`).join(' · ')}</div>` : '';
+  return `<li class="issue-item fc-item" id="fc-item-${c.id}" data-id="${c.id}">
+    <div class="issue-head"><span class="badge v-${verdict}">${esc(VERDICT_LABEL[verdict] || 'Checking…')}</span>${legal ? '<span class="badge legal">Legal</span>' : ''}${c.start == null ? '<span class="cat warn">not found in text</span>' : ''}</div>
+    <div class="claim-quote">“${esc(c.quote)}”</div>
+    ${compact ? '' : `<div class="claim-restated">${esc(c.claim)}</div>`}
+    ${r ? `<div class="expl">${esc(r.explanation)}</div>` : ''}
+    ${r && r.correction ? `<div class="correction"><strong>Accurate version:</strong> ${esc(r.correction)}</div>` : ''}
+    ${sources}
+    ${!compact && r && SEVERITY[verdict] != null ? `<div class="item-actions"><button class="mini-btn" data-act="fc-rule">Don't flag this kind of thing again…</button></div>` : ''}
+  </li>`;
+}
+
+function renderFactCheck() {
+  const claims = [...fc.claims.values()];
+  const highlights = [];
+  for (const c of claims) {
+    if (c.start == null) continue;
+    const r = fc.results.get(c.id);
+    if (r && r.verdict === 'opinion') continue;
+    const legal = (r && r.legal_sensitivity) || c.legal_sensitivity;
+    highlights.push({
+      start: c.start, end: c.end, id: `fc${c.id}`,
+      cls: `v-${r ? r.verdict : 'pending'}${legal ? ' legal' : ''}`,
+      label: r && SEVERITY[r.verdict] != null ? '!' : null,
+      title: r ? `${VERDICT_LABEL[r.verdict]}: ${r.explanation}` : 'Being checked…',
+    });
+  }
+  $('factcheck-doc').innerHTML = renderDoc(fc.doc, highlights);
+
+  const attention = claims.filter(c => SEVERITY[fc.results.get(c.id)?.verdict] != null)
+    .sort((a, b) => SEVERITY[fc.results.get(a.id).verdict] - SEVERITY[fc.results.get(b.id).verdict] || (a.start ?? 1e9) - (b.start ?? 1e9));
+  const legal = claims.filter(c => fc.results.get(c.id)?.legal_sensitivity || c.legal_sensitivity);
+  const fine = claims.filter(c => fc.results.get(c.id)?.verdict === 'correct');
+  const pending = claims.filter(c => !fc.results.has(c.id));
+
+  $('fc-attention').innerHTML = attention.map(c => fcItem(c, fc.results.get(c.id))).join('')
+    || `<li class="muted">${pending.length ? 'Nothing flagged yet.' : 'Nothing flagged.'}</li>`;
+  $('fc-attn-count').textContent = `(${attention.length})`;
+  $('fc-legal').innerHTML = legal.map(c => fcItem(c, fc.results.get(c.id), { compact: true })).join('') || '<li class="muted">None.</li>';
+  $('fc-legal-count').textContent = `(${legal.length})`;
+  $('fc-legal-wrap').open = legal.length > 0 && legal.length <= 6;
+  $('fc-fine').innerHTML = fine.map(c => fcItem(c, fc.results.get(c.id), { compact: true })).join('') || '<li class="muted">None yet.</li>';
+  $('fc-fine-count').textContent = `(${fine.length})`;
+}
+
+async function runFactCheck() {
+  $('factcheck-section').classList.remove('hidden');
+  $('factcheck-body').classList.add('hidden');
+  const status = $('factcheck-status');
+  status.innerHTML = '<span class="spinner"></span> Starting fact-check…';
+  fc = { doc: null, claims: new Map(), results: new Map(), final: false };
+  const p = basePayload();
+  let failed = false;
+  try {
+    await stream('/api/fact-check', { article: p.article, guidance: p.guidance, deep: $('factcheck-deep').checked, styleGuide: guideOverride('factCheck') }, ev => {
+      if (ev.type === 'progress') status.innerHTML = `<span class="spinner"></span> ${esc(ev.message)}`;
+      if (ev.type === 'claims') {
+        fc.doc = ev.doc;
+        ev.claims.forEach(c => fc.claims.set(c.id, c));
+        $('factcheck-body').classList.remove('hidden');
+        renderFactCheck();
+      }
+      if (ev.type === 'verdicts') { ev.results.forEach(r => fc.results.set(r.id, r)); renderFactCheck(); }
+      if (ev.type === 'final') { fc.results = new Map(ev.results.map(r => [r.id, r])); fc.final = true; renderFactCheck(); }
+      if (ev.type === 'error') { failed = true; status.innerHTML = `<span class="inline-error">Fact-check failed: ${esc(ev.error)}</span>`; }
+    });
+    if (!failed) {
+      const flagged = [...fc.results.values()].filter(r => SEVERITY[r.verdict] != null).length;
+      status.textContent = fc.claims.size
+        ? `Done — checked ${fc.claims.size} claims; ${flagged} need${flagged === 1 ? 's' : ''} attention.`
+        : 'No checkable factual claims found.';
+    }
+  } catch (e) {
+    status.innerHTML = `<span class="inline-error">Fact-check failed: ${esc(e.message)}</span>`;
+  }
+}
+
+$('factcheck-section').addEventListener('click', e => {
+  const mark = e.target.closest('mark.hl, sup.hl-num');
+  if (mark) {
+    const id = mark.dataset.ids.split(' ')[0].replace('fc', '');
+    const li = document.querySelector(`#fc-attention #fc-item-${id}`) || document.querySelector(`#fc-item-${id}`);
+    if (li) {
+      li.closest('details')?.setAttribute('open', '');
+      li.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      li.classList.add('flash');
+      setTimeout(() => li.classList.remove('flash'), 1200);
+    }
+    return;
+  }
+  const btn = e.target.closest('[data-act="fc-rule"]');
+  if (!btn) return;
+  const id = Number(btn.closest('.issue-item').dataset.id);
+  const c = fc.claims.get(id);
+  const r = fc.results.get(id);
+  openRuleModal({
+    scope: 'factCheck',
+    text: '',
+    context: `Flag the editor disagreed with: "${c.quote}" — ${r.verdict}: ${r.explanation}`,
+  });
+});
+
+// ---------------- Run ----------------
+$('process-btn').addEventListener('click', async () => {
+  const article = articleText.value.trim();
+  const error = $('error');
+  if (!article) { error.textContent = 'Please enter article text'; error.classList.remove('hidden'); return; }
   const tasks = {
-    headlines: taskHeadlines.checked,
-    social: taskSocial.checked,
-    copyEdit: taskCopyedit.checked,
-    flagClaims: taskFlagclaims.checked,
-    factCheck: taskFactcheck.checked
+    headlines: $('task-headlines').checked,
+    social: $('task-social').checked,
+    copyEdit: $('task-copyedit').checked,
+    factCheck: $('task-factcheck').checked,
   };
-
-  if (!Object.values(tasks).some(v => v)) {
-    showError('Please select at least one task');
-    return;
-  }
-
-  hideError();
-  setLoading(true);
-  clearResults();
-
-  const styleGuides = {
-    headlines: headlinesGuide.value,
-    socialMedia: socialGuide.value,
-    copyEdit: copyeditGuide.value,
-    factCheck: factcheckGuide.value
-  };
-
-  try {
-    const response = await fetch('/api/process-stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, tasks, styleGuides, factCheckConfirmed: false })
-    });
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    resultsSection.classList.remove('hidden');
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.slice(6));
-          handleSSEMessage(data);
-        }
-      }
-    }
-  } catch (err) {
-    showError(err.message);
-  } finally {
-    setLoading(false);
-  }
-});
-
-function handleSSEMessage(data) {
-  if (data.type === 'progress') {
-    loadingText.textContent = data.message;
-  } else if (data.type === 'result') {
-    handleResult(data.task, data.data);
-  } else if (data.type === 'error') {
-    console.error(`Error in ${data.task}:`, data.error);
-  } else if (data.type === 'confirm_required') {
-    // Handle confirmation request for large claim counts
-    handleConfirmRequired(data);
-  }
-}
-
-// Handle confirmation request for fact-checking many claims
-function handleConfirmRequired(data) {
-  if (data.task === 'factCheck') {
-    // Show custom Yes/No modal
-    showConfirmModal(
-      `Found ${data.claimCount} claims to fact-check`,
-      'This may take a while and use more API credits. Do you want to proceed?',
-      async () => {
-        // User clicked Yes - proceed with fact-check
-        setLoading(true);
-        loadingText.textContent = 'Proceeding with fact-check...';
-        resultsSection.classList.remove('hidden');
-
-        const text = articleText.value.trim();
-        const styleGuides = {
-          headlines: headlinesGuide.value,
-          socialMedia: socialGuide.value,
-          copyEdit: copyeditGuide.value,
-          factCheck: factcheckGuide.value
-        };
-
-        try {
-          const response = await fetch('/api/process-stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text,
-              tasks: { factCheck: true },
-              styleGuides,
-              factCheckConfirmed: true
-            })
-          });
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop();
-
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const msgData = JSON.parse(line.slice(6));
-                handleSSEMessage(msgData);
-              }
-            }
-          }
-        } catch (err) {
-          showError(err.message);
-        } finally {
-          setLoading(false);
-        }
-      },
-      () => {
-        // User clicked No - cancel and clear fact-check section
-        factcheckSection.classList.add('hidden');
-        factcheckOutput.innerHTML = '';
-        factcheckClaimsList.innerHTML = '';
-        factcheckClaims.classList.add('hidden');
-        setLoading(false);
-      }
-    );
-  }
-}
-
-// Custom confirmation modal with Yes/No buttons
-function showConfirmModal(title, message, onYes, onNo) {
-  // Remove any existing modal
-  const existingModal = document.getElementById('confirm-modal');
-  if (existingModal) existingModal.remove();
-
-  const modal = document.createElement('div');
-  modal.id = 'confirm-modal';
-  modal.className = 'confirm-modal-overlay';
-  modal.innerHTML = `
-    <div class="confirm-modal">
-      <h3>${title}</h3>
-      <p>${message}</p>
-      <div class="confirm-modal-buttons">
-        <button class="confirm-btn-no">No</button>
-        <button class="confirm-btn-yes">Yes</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-
-  modal.querySelector('.confirm-btn-yes').addEventListener('click', () => {
-    modal.remove();
-    onYes();
-  });
-
-  modal.querySelector('.confirm-btn-no').addEventListener('click', () => {
-    modal.remove();
-    onNo();
-  });
-}
-
-function handleResult(task, data) {
-  if (task === 'headlines') {
-    headlinesSection.classList.remove('hidden');
-    renderHeadlines(data);
-  } else if (task === 'social') {
-    socialSection.classList.remove('hidden');
-    socialData[data.platform] = data.suggestions;
-    if (data.platform === currentPlatform) {
-      renderSocialPosts();
-    }
-  } else if (task === 'copyEdit') {
-    copyeditSection.classList.remove('hidden');
-    renderCopyEdit(data.text);
-  } else if (task === 'flagClaims') {
-    flagclaimsSection.classList.remove('hidden');
-    renderFlagClaims(data.text);
-  } else if (task === 'factCheck') {
-    factcheckSection.classList.remove('hidden');
-    renderFactCheck(data.text);
-  }
-}
-
-function renderHeadlines(suggestions) {
-  headlinesList.innerHTML = suggestions.map((s, i) => `
-    <div class="headline-card">
-      <span class="headline-style">${escapeHtml(s.style || ['Straight', 'Provocative', 'Creative'][i])}</span>
-      <h3>${escapeHtml(s.headline)}</h3>
-      <p>${escapeHtml(s.dek)}</p>
-      <button class="copy-btn secondary-btn" onclick="copyText('${escapeForOnclick(s.headline + '\\n\\n' + s.dek)}')">Copy</button>
-    </div>
-  `).join('');
-}
-
-// Regenerate headlines
-regenerateBtn.addEventListener('click', async () => {
-  const text = articleText.value.trim();
-  if (!text) return;
-
-  regenerateBtn.disabled = true;
-  regenerateBtn.textContent = 'Generating...';
-
-  try {
-    const response = await fetch('/api/regenerate-headlines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, styleGuide: headlinesGuide.value })
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-
-    renderHeadlines(data.suggestions);
-  } catch (err) {
-    console.error('Regenerate error:', err);
-  } finally {
-    regenerateBtn.disabled = false;
-    regenerateBtn.textContent = 'Regenerate';
-  }
-});
-
-// Regenerate social media posts
-regenerateSocialBtn.addEventListener('click', async () => {
-  const text = articleText.value.trim();
-  if (!text) return;
-
-  regenerateSocialBtn.disabled = true;
-  regenerateSocialBtn.textContent = 'Generating...';
-
-  try {
-    const response = await fetch('/api/regenerate-social', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, styleGuide: socialGuide.value })
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-
-    // Update all platforms
-    socialData = data.suggestions;
-    renderSocialPosts();
-  } catch (err) {
-    console.error('Regenerate social error:', err);
-  } finally {
-    regenerateSocialBtn.disabled = false;
-    regenerateSocialBtn.textContent = 'Regenerate';
-  }
-});
-
-// Parse and render copy-edit results
-function renderCopyEdit(text) {
-  // Split article from issues list
-  const parts = text.split(/---ISSUES---/i);
-  const articleText = parts[0].trim();
-  const issuesText = parts[1] || '';
-
-  // FIRST: Parse the issues list to build lookup maps
-  const issues = [];
-  let match;
-
-  // Split issues text into individual lines for processing
-  const issueLines = issuesText.trim().split('\n').filter(l => l.trim());
-
-  // Process each line that starts with a number
-  let currentIssue = null;
-  for (const line of issueLines) {
-    const lineMatch = line.match(/^(\d+)\.\s*(.+)/);
-    if (lineMatch) {
-      // Save previous issue if exists
-      if (currentIssue) {
-        issues.push(currentIssue);
-      }
-
-      const num = lineMatch[1];
-      const content = lineMatch[2];
-
-      // Try to parse structured format: "original" → "fix" (CATEGORY: reason)
-      const structuredMatch = content.match(/["„»]([^""„"«»]+)["„"«»]\s*(?:->|→)\s*["„»]([^""„"«»]+)["„"«»]\s*\(([^)]+)\)/);
-      if (structuredMatch) {
-        currentIssue = {
-          index: num,
-          original: structuredMatch[1],
-          fix: structuredMatch[2],
-          reason: structuredMatch[3]
-        };
-      } else {
-        // Try simpler format: "original" → "fix" — reason
-        const simpleMatch = content.match(/["„»]([^""„"«»]+)["„"«»]\s*(?:->|→)\s*["„»]([^""„"«»]+)["„"«»]\s*[—\-–]\s*(.+)/);
-        if (simpleMatch) {
-          currentIssue = {
-            index: num,
-            original: simpleMatch[1],
-            fix: simpleMatch[2],
-            reason: simpleMatch[3].trim()
-          };
-        } else {
-          // Fallback: just store the whole line as reason
-          currentIssue = {
-            index: num,
-            original: '',
-            fix: '',
-            reason: content.trim()
-          };
-        }
-      }
-    } else if (currentIssue && line.trim()) {
-      // Continuation of previous issue (multi-line reason)
-      currentIssue.reason += ' ' + line.trim();
-    }
-  }
-  // Don't forget the last issue
-  if (currentIssue) {
-    issues.push(currentIssue);
-  }
-
-  // Build TWO lookup maps for matching
-  const issueByNum = new Map();
-  const issueByContent = new Map();
-
-  issues.forEach(issue => {
-    let tooltip;
-    if (issue.original && issue.fix) {
-      tooltip = `"${issue.original}" → "${issue.fix}"\n${issue.reason}`;
-      const contentKey = issue.original.trim().toLowerCase();
-      issueByContent.set(contentKey, tooltip);
-    } else {
-      tooltip = issue.reason;
-    }
-    issueByNum.set(issue.index, tooltip);
-  });
-
-  // NOW: Parse [[ISSUE: text]] markers in article with instant tooltips
-  const issueRegex = /\[\[ISSUE:\s*(.+?)\]\]/g;
-  const seenIssues = new Map();
-  let nextIssueNum = 1;
-
-  const html = articleText.replace(issueRegex, (match, problemText) => {
-    const normalizedText = problemText.trim().toLowerCase();
-    let issueNum;
-
-    if (seenIssues.has(normalizedText)) {
-      issueNum = seenIssues.get(normalizedText);
-    } else {
-      issueNum = nextIssueNum++;
-      seenIssues.set(normalizedText, issueNum);
-    }
-
-    // Try position-based matching first
-    let tooltipText = issueByNum.get(String(issueNum));
-
-    // If not found, try content-based matching
-    if (!tooltipText) {
-      tooltipText = issueByContent.get(normalizedText);
-      if (!tooltipText) {
-        // Partial match as fallback
-        for (const [key, tip] of issueByContent.entries()) {
-          if (key.includes(normalizedText) || normalizedText.includes(key)) {
-            tooltipText = tip;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!tooltipText) {
-      tooltipText = `Issue #${issueNum}`;
-    }
-
-    const escapedTooltip = escapeHtml(tooltipText).replace(/\n/g, '<br>');
-
-    return `<span class="edit-issue"><span class="instant-tooltip">${escapedTooltip}</span>${escapeHtml(problemText)}</span><sup>[${issueNum}]</sup>`;
-  });
-
-  copyeditOutput.innerHTML = html.replace(/\n/g, '<br>');
-
-  // Display issues list
-  if (issues.length > 0) {
-    copyeditIssuesList.innerHTML = issues.map(issue => {
-      if (issue.original && issue.fix) {
-        return `<li><strong>[${issue.index}]</strong> "${escapeHtml(issue.original)}" → "${escapeHtml(issue.fix)}" — ${escapeHtml(issue.reason)}</li>`;
-      } else {
-        return `<li><strong>[${issue.index}]</strong> ${escapeHtml(issue.reason)}</li>`;
-      }
-    }).join('');
-    copyeditIssues.classList.remove('hidden');
-  } else {
-    copyeditIssues.classList.add('hidden');
-  }
-}
-
-// Parse and render flag claims results
-function renderFlagClaims(text) {
-  const claims = [];
-
-  // Split article from claims list
-  const parts = text.split(/---CLAIMS---/i);
-  const articleText = parts[0].trim();
-  const claimsText = parts[1] || '';
-
-  // Helper to get CSS class suffix from category
-  function getCategoryClass(category) {
-    const cat = category.trim().toLowerCase();
-    const validCategories = ['statistic', 'quote', 'historical', 'scientific', 'biographical', 'current', 'legal', 'policy', 'sensitive'];
-    return validCategories.includes(cat) ? cat : 'historical'; // default fallback
-  }
-
-  // Parse [[CLAIM: text | category | reason]] markers
-  const claimRegex = /\[\[CLAIM:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\]\]/g;
-
-  let html = articleText.replace(claimRegex, (match, claim, category, reason) => {
-    const catClass = getCategoryClass(category);
-    claims.push({ claim, category: category.trim(), reason, catClass });
-    const tooltipText = `${escapeHtml(category)}: ${escapeHtml(reason)}`;
-    return `<span class="claim-to-verify claim-category-${catClass}"><span class="instant-tooltip">${tooltipText}</span>${escapeHtml(claim)}</span>`;
-  });
-
-  flagclaimsOutput.innerHTML = html.replace(/\n/g, '<br>');
-
-  // Parse the claims list
-  if (claimsText.trim()) {
-    const listRegex = /(\d+)\.\s*"([^"]+)"\s*\(([^)]+)\)\s*[-–—]\s*(.+?)(?=\n\d+\.|$)/gs;
-    const parsedClaims = [];
-    let match;
-    while ((match = listRegex.exec(claimsText)) !== null) {
-      const catClass = getCategoryClass(match[3]);
-      parsedClaims.push({
-        index: match[1],
-        claim: match[2],
-        category: match[3].trim(),
-        verify: match[4].trim(),
-        catClass
-      });
-    }
-
-    if (parsedClaims.length > 0) {
-      flagclaimsList.innerHTML = parsedClaims.map(c =>
-        `<li class="claim-item-${c.catClass}"><span class="claim-category claim-category-badge-${c.catClass}">${escapeHtml(c.category)}</span> "${escapeHtml(c.claim)}" — ${escapeHtml(c.verify)}</li>`
-      ).join('');
-      flagclaimsListContainer.classList.remove('hidden');
-    } else if (claims.length > 0) {
-      // Fallback: use inline claims
-      flagclaimsList.innerHTML = claims.map(c =>
-        `<li class="claim-item-${c.catClass}"><span class="claim-category claim-category-badge-${c.catClass}">${escapeHtml(c.category)}</span> "${escapeHtml(c.claim)}" — ${escapeHtml(c.reason)}</li>`
-      ).join('');
-      flagclaimsListContainer.classList.remove('hidden');
-    } else {
-      flagclaimsListContainer.classList.add('hidden');
-    }
-  } else {
-    flagclaimsListContainer.classList.add('hidden');
-  }
-}
-
-// Parse and render fact-check results
-function renderFactCheck(text) {
-  const claims = [];
-
-  // Helper to extract URL from text
-  function extractUrl(text) {
-    const urlMatch = text.match(/https?:\/\/[^\s\]]+/);
-    return urlMatch ? urlMatch[0] : null;
-  }
-
-  // Helper to format detail with link
-  function formatDetailWithLink(detail, url) {
-    if (!detail) return '';
-    // Remove URL from detail text if it's at the end
-    let cleanDetail = detail.replace(/\s*https?:\/\/[^\s]+\s*$/, '').trim();
-    if (url) {
-      return ` — ${escapeHtml(cleanDetail)} <a href="${escapeHtml(url)}" target="_blank" class="source-link">[source]</a>`;
-    }
-    return ` — ${escapeHtml(cleanDetail)}`;
-  }
-
-  // Helper to create tooltip span
-  function makeTooltip(content) {
-    if (!content) return '';
-    return `<span class="instant-tooltip">${escapeHtml(content)}</span>`;
-  }
-
-  // Parse different claim types - now with 3 parts: claim | detail | url
-  const verifiedRegex = /\[\[VERIFIED:\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\]\]/g;
-  const verifiedSimpleRegex = /\[\[VERIFIED:\s*(.+?)\s*\|\s*(.+?)\]\]/g;
-  const verifiedBasicRegex = /\[\[VERIFIED:\s*(.+?)\]\]/g;
-  const questionableRegex = /\[\[QUESTIONABLE:\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?\]\]/g;
-  const incorrectRegex = /\[\[INCORRECT:\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?\]\]/g;
-  const checkCurrentRegex = /\[\[CHECK_CURRENT:\s*(.+?)\s*\|\s*(.+?)(?:\s*\|\s*(.+?))?\]\]/g;
-
-  let html = text;
-
-  // Replace verified claims (with evidence and URL)
-  html = html.replace(verifiedRegex, (match, claim, evidence, url) => {
-    const cleanUrl = extractUrl(url) || extractUrl(evidence);
-    claims.push({ type: 'verified', claim, detail: evidence, url: cleanUrl });
-    const tooltipContent = evidence || 'Verified';
-    return `<span class="claim-verified">${makeTooltip(tooltipContent)}${escapeHtml(claim)}</span>`;
-  });
-
-  // Replace verified claims (with evidence, no URL)
-  html = html.replace(verifiedSimpleRegex, (match, claim, evidence) => {
-    const url = extractUrl(evidence);
-    claims.push({ type: 'verified', claim, detail: evidence, url });
-    return `<span class="claim-verified">${makeTooltip(evidence)}${escapeHtml(claim)}</span>`;
-  });
-
-  // Replace verified claims (basic - no evidence)
-  html = html.replace(verifiedBasicRegex, (match, claim) => {
-    claims.push({ type: 'verified', claim, detail: null, url: null });
-    return `<span class="claim-verified">${makeTooltip('Verified')}${escapeHtml(claim)}</span>`;
-  });
-
-  // Replace questionable claims
-  html = html.replace(questionableRegex, (match, claim, concern, url) => {
-    const cleanUrl = url ? extractUrl(url) : extractUrl(concern);
-    claims.push({ type: 'questionable', claim, detail: concern, url: cleanUrl });
-    return `<span class="claim-questionable">${makeTooltip(concern)}${escapeHtml(claim)}</span>`;
-  });
-
-  // Replace incorrect claims
-  html = html.replace(incorrectRegex, (match, claim, correction, url) => {
-    const cleanUrl = url ? extractUrl(url) : extractUrl(correction);
-    claims.push({ type: 'incorrect', claim, detail: correction, url: cleanUrl });
-    return `<span class="claim-incorrect">${makeTooltip(correction)}${escapeHtml(claim)}</span>`;
-  });
-
-  // Replace check-current claims
-  html = html.replace(checkCurrentRegex, (match, claim, whatToCheck, url) => {
-    const cleanUrl = url ? extractUrl(url) : extractUrl(whatToCheck);
-    claims.push({ type: 'check-current', claim, detail: whatToCheck, url: cleanUrl });
-    return `<span class="claim-check-current">${makeTooltip(whatToCheck)}${escapeHtml(claim)}</span>`;
-  });
-
-  factcheckOutput.innerHTML = html.replace(/\n/g, '<br>');
-
-  if (claims.length > 0) {
-    factcheckClaimsList.innerHTML = claims.map(c => {
-      const icon = c.type === 'verified' ? '✓' : c.type === 'questionable' ? '?' : c.type === 'incorrect' ? '✗' : '⏱';
-      const detailHtml = formatDetailWithLink(c.detail, c.url);
-      return `<li class="claim-item-${c.type}"><span class="claim-icon">${icon}</span> ${escapeHtml(c.claim)}${detailHtml}</li>`;
-    }).join('');
-    factcheckClaims.classList.remove('hidden');
-  } else {
-    factcheckClaims.classList.add('hidden');
-  }
-}
-
-function setLoading(isLoading) {
-  loading.classList.toggle('hidden', !isLoading);
-  processBtn.disabled = isLoading;
-}
-
-function showError(message) {
-  error.textContent = message;
-  error.classList.remove('hidden');
-}
-
-function hideError() {
+  if (!Object.values(tasks).some(Boolean)) { error.textContent = 'Please select at least one task'; error.classList.remove('hidden'); return; }
   error.classList.add('hidden');
-}
 
-function clearResults() {
-  headlinesSection.classList.add('hidden');
-  socialSection.classList.add('hidden');
-  copyeditSection.classList.add('hidden');
-  flagclaimsSection.classList.add('hidden');
-  factcheckSection.classList.add('hidden');
-  headlinesList.innerHTML = '';
-  socialData = { substack: [], twitter: [], instagram: [] };
-  socialContent.innerHTML = '';
-  copyeditOutput.innerHTML = '';
-  copyeditIssuesList.innerHTML = '';
-  copyeditIssues.classList.add('hidden');
-  flagclaimsOutput.innerHTML = '';
-  flagclaimsList.innerHTML = '';
-  flagclaimsListContainer.classList.add('hidden');
-  factcheckOutput.innerHTML = '';
-  factcheckClaimsList.innerHTML = '';
-  factcheckClaims.classList.add('hidden');
-}
+  ['headlines-section', 'social-section', 'copyedit-section', 'factcheck-section'].forEach(id => $(id).classList.add('hidden'));
+  const btn = $('process-btn');
+  btn.disabled = true;
+  btn.textContent = 'Working…';
+  const jobs = [];
+  if (tasks.headlines) {
+    $('headlines-section').classList.remove('hidden');
+    headlinesPanel.reset();
+    jobs.push(headlinesPanel.generate());
+  }
+  if (tasks.social) {
+    $('social-section').classList.remove('hidden');
+    for (const panel of Object.values(socialPanels)) { panel.reset(); jobs.push(panel.generate()); }
+  }
+  if (tasks.copyEdit) jobs.push(runCopyEdit());
+  if (tasks.factCheck) jobs.push(runFactCheck());
+  await Promise.allSettled(jobs);
+  btn.disabled = false;
+  btn.textContent = 'Process Article';
+});
+
+window.Shared.loadFooter($('footer'));

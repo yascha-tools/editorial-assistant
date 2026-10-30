@@ -1,0 +1,16 @@
+{
+  "_comment": "Pinned model per tier. Newer models are proposed for approval on the /admin page at most once per review interval; an approved upgrade is stored in the database and overrides the model listed here. Edit this file only to change the fallback defaults.",
+  "lastReviewed": "2026-10-30",
+  "reviewIntervalDays": 90,
+  "tiers": {
+    "top": { "model": "claude-fable-5-1", "line": "fable", "label": "Fable" },
+    "standard": { "model": "claude-opus-5-5", "line": "opus", "label": "Opus" },
+    "fast": { "model": "claude-sonnet-5-5", "line": "sonnet", "label": "Sonnet" }
+  },
+  "pricingPerMillionTokens": {
+    "claude-fable-5-1": { "input": 10, "output": 50 },
+    "claude-opus-5-5": { "input": 4, "output": 20 },
+    "claude-sonnet-5-5": { "input": 2, "output": 10 }
+  },
+  "webSearchCostPerThousand": 10
+}

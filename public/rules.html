@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>House Rules — Persuasion Tools</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>House Rules</h1>
+      <div class="header-actions">
+        <button class="toggle-btn" id="new-rule">Propose a rule</button>
+        <a class="toggle-btn" href="/">Back to the tool</a>
+      </div>
+    </div>
+    <p class="subtitle">Standing instructions the team has added on top of the style guides. They apply to every run.</p>
+    <div id="rules" class="result-box"></div>
+  </div>
+  <script src="shared.js"></script>
+  <script>
+    (async function () {
+      const { api, escapeHtml: esc, openRuleModal } = window.Shared;
+      document.getElementById('new-rule').onclick = () => openRuleModal({});
+      try {
+        const { scopes, rules } = await api('/api/rules');
+        const el = document.getElementById('rules');
+        el.innerHTML = scopes.map(s => {
+          const rs = rules.filter(r => r.scope === s.key);
+          return `<h3>${esc(s.label)}</h3>${rs.length ? `<ul class="rules-list">${rs.map(r => `<li>${esc(r.rule)} ${r.status === 'pending' ? '<span class="badge-pending">awaiting approval</span>' : ''}<span class="muted small"> — ${esc(r.submitted_by || 'unknown')}</span></li>`).join('')}</ul>` : '<p class="muted">No rules yet.</p>'}`;
+        }).join('');
+      } catch (e) {
+        document.getElementById('rules').textContent = e.message;
+      }
+    })();
+  </script>
+</body>
+</html>

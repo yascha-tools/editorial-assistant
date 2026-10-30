@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — Persuasion Tools</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Admin</h1>
+      <div class="header-actions"><a class="toggle-btn" href="/">Back to the tool</a></div>
+    </div>
+
+    <div id="login" class="result-box hidden">
+      <h2>Admin login</h2>
+      <p class="muted">Uses the ADMIN_PASSWORD set on Render (separate from the team password).</p>
+      <div class="doc-url-row"><input type="password" id="admin-password" placeholder="Admin password"><button id="admin-login-btn">Log in</button></div>
+      <div id="login-error" class="inline-error"></div>
+    </div>
+
+    <div id="admin" class="hidden">
+      <div id="alerts"></div>
+
+      <div class="result-box">
+        <div class="result-header"><h2>Rules awaiting approval</h2></div>
+        <div id="pending-rules"></div>
+      </div>
+
+      <div class="result-box">
+        <div class="result-header"><h2>Models</h2><button class="secondary-btn" id="check-models">Check for new models now</button></div>
+        <div id="models"></div>
+      </div>
+
+      <div class="result-box">
+        <div class="result-header"><h2>Active house rules</h2></div>
+        <div id="active-rules"></div>
+      </div>
+
+      <div class="result-box">
+        <div class="result-header"><h2>AI usage (last 30 days)</h2></div>
+        <div id="usage"></div>
+      </div>
+
+      <details class="result-box">
+        <summary>Rejected rules</summary>
+        <div id="rejected-rules"></div>
+      </details>
+
+      <p><button class="link-btn" id="admin-logout">Log out of admin</button></p>
+    </div>
+  </div>
+
+  <script src="shared.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

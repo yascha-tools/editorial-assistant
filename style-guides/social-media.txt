@@ -51,9 +51,9 @@ Social media copy for Persuasion should drive engagement while maintaining the p
 
 ---
 
-### TWITTER/X
+### X (FORMERLY TWITTER)
 
-**Character limit:** 280 characters
+**Character limit:** 256 characters for the text (the article link added when posting takes the rest of X's 280)
 
 **Tone:** Punchy, direct, can be slightly more provocative than other platforms
 
@@ -82,6 +82,27 @@ Social media copy for Persuasion should drive engagement while maintaining the p
 - Every character counts—edit ruthlessly
 - Em-dashes and colons can help compress
 - "& " instead of "and" if desperate for space (use sparingly)
+
+---
+
+### LINKEDIN
+
+**Length:** Up to about 1,200 characters; 600-1,000 usually works best. Only the first ~200 characters show before "see more," so the opening line or two must carry the hook on their own.
+
+**Tone:** The most professional of the platforms, but still Persuasion's voice: substantive, confident, never corporate. Write for policy professionals, academics, journalists, and engaged readers who want ideas, not outrage.
+
+**Best practices:**
+- Open with the article's sharpest claim or a striking fact — not "We're excited to share..."
+- Two to four short paragraphs; line breaks between them
+- Name the author with a brief credential ("Francis Fukuyama, senior fellow at Stanford, argues...")
+- Explain why the argument matters now, in a sentence or two
+- End with a plain invitation to read ("Read the full essay at Persuasion.")
+- NO HASHTAGS, no emoji, no "link in comments"
+
+**What to avoid:**
+- LinkedIn clichés ("Thrilled to share," "Here's why that matters 👇," "Agree?")
+- One-line-per-sentence "broetry" formatting
+- Engagement bait questions
 
 ---
 
@@ -115,6 +136,12 @@ Yascha Mounk on how we lost the freedoms of city life. Link in bio.
 - Burying the hook
 - Excessive hashtags that look spammy
 - Ignoring the visual element (pair with compelling image)
+
+---
+
+## LINKS
+
+Never put a URL or a placeholder like [link] in the post text; the link is attached when posting. (Instagram captions may say "Link in bio.")
 
 ---
 
