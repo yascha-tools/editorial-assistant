@@ -149,6 +149,7 @@ const modelcheck = require('./lib/modelcheck');
 const { parseLite, locate, linksIn, guessTitle } = require('./lib/doc');
 const { htmlToLite } = require('./lib/richtext');
 const { notificationsConfigured } = require('./lib/notify');
+const { tooSimilar, editorNotes, roundsBlock, steeringInstructions } = require('./lib/options');
 
 // Which model tier and how much thinking each task gets. "standard" is the
 // current Opus; "top" is the current Fable (used for the optional deep fact-check).
@@ -305,12 +306,6 @@ function errorMessage(e) {
   return e?.message || 'Something went wrong.';
 }
 
-function editorNotes(guidance) {
-  return guidance && guidance.trim()
-    ? `\n<editor_notes>\nNotes from the editor about this piece. Follow them unless they conflict with accuracy:\n${guidance.trim()}\n</editor_notes>\n`
-    : '';
-}
-
 // ==================== FETCHING ARTICLES ====================
 
 async function fetchSubstack(url) {
@@ -403,41 +398,6 @@ app.post('/api/convert-html', (req, res) => {
 });
 
 // ==================== HEADLINES & SOCIAL (options with feedback) ====================
-
-const STOP = new Set('a an the and or but of to in on for at by with from as is are was were be its it this that how why what who we our us your their his her'.split(' '));
-function wordSet(s) {
-  return new Set(String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, ' ').split(/\s+/).filter(w => w && !STOP.has(w)));
-}
-function tooSimilar(a, b) {
-  const A = wordSet(a), B = wordSet(b);
-  if (!A.size || !B.size) return false;
-  const na = [...A].join(' '), nb = [...B].join(' ');
-  if (na === nb) return true;
-  let inter = 0;
-  for (const w of A) if (B.has(w)) inter++;
-  const dice = (2 * inter) / (A.size + B.size);
-  const containment = inter / Math.min(A.size, B.size);
-  return dice >= 0.75 || (containment === 1 && Math.min(A.size, B.size) >= 3);
-}
-
-function roundsBlock(history, describe) {
-  if (!Array.isArray(history) || !history.length) return '';
-  return `\n<previous_rounds>\n${history.map((r, i) => `Round ${i + 1} options:\n${(r.options || []).map(o => `- ${describe(o)}`).join('\n')}${r.feedback ? `\nEditor's feedback on round ${i + 1}: ${r.feedback}` : ''}`).join('\n\n')}\n</previous_rounds>\n`;
-}
-
-function steeringInstructions({ feedback, variantOf, pinned, describe }) {
-  let s = '';
-  if (Array.isArray(pinned) && pinned.length) {
-    s += `\n<pinned>\nThe editor has pinned these as keepers. Don't repeat them; use them as a signal of what they like:\n${pinned.map(o => `- ${describe(o)}`).join('\n')}\n</pinned>\n`;
-  }
-  if (variantOf) {
-    s += `\n<more_like_this>\nThe editor liked this option and wants variations on it — keep what makes it work while trying different wording and angles:\n${describe(variantOf)}\n</more_like_this>\n`;
-  }
-  if (feedback && feedback.trim()) {
-    s += `\n<latest_feedback>\n${feedback.trim()}\n</latest_feedback>\nThis feedback is the most important instruction: the new options must clearly respond to it.\n`;
-  }
-  return s;
-}
 
 const HEADLINE_SCHEMA = {
   type: 'object',

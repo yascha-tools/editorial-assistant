@@ -199,7 +199,7 @@ function renderCopyEdit() {
 async function runCopyEdit() {
   $('copyedit-section').classList.remove('hidden');
   $('copyedit-body').classList.add('hidden');
-  $('copyedit-status').innerHTML = '<span class="spinner"></span> Copy-editing…';
+  $('copyedit-status').innerHTML = '<span class="spin-inline"></span> Copy-editing…';
   try {
     const p = basePayload();
     const data = await api('/api/copy-edit', { article: p.article, guidance: p.guidance, formatting: formattingFor(p.article), styleGuide: guideOverride('copyEdit') });
@@ -297,13 +297,13 @@ async function runFactCheck() {
   $('factcheck-section').classList.remove('hidden');
   $('factcheck-body').classList.add('hidden');
   const status = $('factcheck-status');
-  status.innerHTML = '<span class="spinner"></span> Starting fact-check…';
+  status.innerHTML = '<span class="spin-inline"></span> Starting fact-check…';
   fc = { doc: null, claims: new Map(), results: new Map(), final: false };
   const p = basePayload();
   let failed = false;
   try {
     await stream('/api/fact-check', { article: p.article, guidance: p.guidance, deep: $('factcheck-deep').checked, styleGuide: guideOverride('factCheck') }, ev => {
-      if (ev.type === 'progress') status.innerHTML = `<span class="spinner"></span> ${esc(ev.message)}`;
+      if (ev.type === 'progress') status.innerHTML = `<span class="spin-inline"></span> ${esc(ev.message)}`;
       if (ev.type === 'claims') {
         fc.doc = ev.doc;
         ev.claims.forEach(c => fc.claims.set(c.id, c));

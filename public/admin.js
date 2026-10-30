@@ -61,7 +61,7 @@
         const c = candidates[tier];
         return `<tr data-tier="${tier}">
           <td>${esc(t.label)}</td>
-          <td class="small">${tier === 'top' ? 'Deep fact-check' : tier === 'standard' ? 'Almost everything' : 'Small utility tasks'}</td>
+          <td class="small">${esc(t.usedFor || '')}</td>
           <td><code>${esc(t.model)}</code>${t.overridden ? ` <span class="muted small">(upgraded from ${esc(t.defaultModel)})</span>` : ''}${c && c.currentRetiresAt ? `<div class="small warn-text">Retires ${esc(c.currentRetiresAt.slice(0, 10))}</div>` : ''}</td>
           <td>${c && c.id ? `<code>${esc(c.id)}</code><div class="small muted">${esc(c.name)} · released ${esc((c.created_at || '').slice(0, 10))}</div>` : '<span class="muted">—</span>'}</td>
           <td>${c && c.id ? `<button class="mini-btn" data-act="approve-model" data-model="${esc(c.id)}">Approve upgrade</button>` : ''}${t.overridden ? `<button class="mini-btn" data-act="revert-model">Revert</button>` : ''}</td>

@@ -176,7 +176,7 @@
         if (cur.variantOf) html += `<div class="block-label">Variations on “${esc(this.describe(cur.variantOf)).slice(0, 80)}”</div>`;
         html += cur.options.length ? cur.options.map((o, i) => this.card(o, 'current', i)).join('') : '<p class="muted">No new options came back — try different feedback.</p>';
       }
-      if (this.loading) html += `<div class="inline-loading"><span class="spinner"></span> Generating…</div>`;
+      if (this.loading) html += `<div class="inline-loading"><span class="spin-inline"></span> Generating…</div>`;
       if (this.error) html += `<div class="inline-error">${esc(this.error)}</div>`;
       if (cur || this.error) {
         html += `<div class="feedback-box">
@@ -216,6 +216,87 @@
     }
   }
   Shared.OptionsPanel = OptionsPanel;
+
+  // ---------- Single output with feedback / revise (intro copy, clips...) ----------
+  // endpoint receives { ...payload(), history: [{result, feedback}], feedback }
+  // and returns { result }. summarize(result) turns a result into text for history.
+  class RevisionPanel {
+    constructor(opts) {
+      Object.assign(this, opts); // root, endpoint, scope, payload(), render(result), summarize(result), copyText(result)
+      this.versions = [];
+      this.loading = false;
+      this.error = '';
+      this.root.addEventListener('click', e => this.onClick(e));
+      this.render();
+    }
+
+    reset() { this.versions = []; this.error = ''; this.render(); }
+    current() { return this.versions.length ? this.versions[this.versions.length - 1] : null; }
+
+    async generate({ feedback = '' } = {}) {
+      this.loading = true;
+      this.error = '';
+      this.render();
+      try {
+        const body = {
+          ...this.payload(),
+          history: this.versions.map(v => ({ result: this.summarize(v.result), feedback: v.feedback })),
+          feedback,
+        };
+        const res = await Shared.api(this.endpoint, body);
+        if (feedback && this.versions.length) this.versions[this.versions.length - 1].feedback = feedback;
+        this.versions.push({ result: res.result, feedback: null });
+        if (this.onResult) this.onResult(res.result);
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+        this.render();
+      }
+    }
+
+    render() {
+      const cur = this.current();
+      let html = '';
+      if (cur) {
+        html += `<div class="revision-current">${this.render_(cur.result)}</div>`;
+        if (this.copyText) html += `<div class="option-actions"><button class="mini-btn" data-act="copy-current">Copy</button></div>`;
+      }
+      if (this.loading) html += `<div class="inline-loading"><span class="spin-inline"></span> ${cur ? 'Revising' : 'Generating'}…</div>`;
+      if (this.error) html += `<div class="inline-error">${esc(this.error)}</div>`;
+      if (cur || this.error) {
+        html += `<div class="feedback-box">
+          <textarea class="feedback-input" placeholder="Feedback for the next version (e.g. “mention his new book”, “the third topic should be about China”)"></textarea>
+          <div class="feedback-actions">
+            <button class="secondary-btn btn-secondary" data-act="regen" ${this.loading ? 'disabled' : ''}>Regenerate with feedback</button>
+            <button class="link-btn" data-act="save-rule">Save feedback as a standing rule…</button>
+          </div>
+        </div>`;
+      }
+      const older = this.versions.slice(0, -1);
+      if (older.length) {
+        html += `<details class="previous-rounds"><summary>Previous versions (${older.length})</summary>${older.map((v, i) =>
+          `<div class="round"><div class="block-label">Version ${i + 1}${v.feedback ? ` — your feedback: “${esc(v.feedback)}”` : ''}</div><div class="revision-old">${this.render_(v.result)}</div></div>`).join('')}</details>`;
+      }
+      this.root.innerHTML = html;
+    }
+
+    render_(result) { return this.renderResult(result); }
+
+    onClick(e) {
+      const btn = e.target.closest('[data-act]');
+      if (!btn || !this.root.contains(btn)) return;
+      const act = btn.dataset.act;
+      if (act === 'regen') this.generate({ feedback: this.root.querySelector('.feedback-input')?.value || '' });
+      if (act === 'save-rule') {
+        const fb = this.root.querySelector('.feedback-input')?.value || '';
+        Shared.openRuleModal({ scope: this.scope, text: fb, context: this.current() ? this.summarize(this.current().result).slice(0, 1500) : '' });
+      }
+      if (act === 'copy-current' && this.current()) Shared.copy(this.copyText(this.current().result), btn);
+      if (this.onAction) this.onAction(act, btn, this);
+    }
+  }
+  Shared.RevisionPanel = RevisionPanel;
 
   // ---------- House-rule modal ----------
   let scopesCache = null;

@@ -750,7 +750,7 @@ textarea.guidance { width: 100%; min-height: 64px; padding: 0.7rem; border: 1px 
 .link-btn { background: none; border: none; color: #1a365d; text-decoration: underline; padding: 0.3rem 0; }
 .link-btn:hover { background: none; color: #0d9488; }
 
-.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #cbd5e1; border-top-color: #1a365d; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+.spin-inline { display: inline-block; width: 14px; height: 14px; border: 2px solid #cbd5e1; border-top-color: #1a365d; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -2px; margin-right: 6px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .inline-loading { padding: 0.75rem 0; color: #374151; }
 .inline-error { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; display: inline-block; }
