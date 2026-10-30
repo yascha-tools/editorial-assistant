@@ -5,3 +5,4 @@ node_modules/
 cookie.txt
 data/
 *.png
+!public/ig/*.png

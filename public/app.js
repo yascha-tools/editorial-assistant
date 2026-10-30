@@ -48,7 +48,9 @@ $('propose-rule-link').addEventListener('click', e => { e.preventDefault(); open
 const articleText = $('article-text');
 const titleInput = $('current-title');
 const dekInput = $('current-dek');
+const authorInput = $('author');
 let formattingSource = 'plain';
+let articleImage = ''; // lead image of a fetched Substack post / Google Doc
 let titleTouched = false;
 titleInput.addEventListener('input', () => { titleTouched = true; });
 
@@ -83,6 +85,8 @@ $('fetch-doc-btn').addEventListener('click', async () => {
     titleTouched = false;
     titleInput.value = data.title || '';
     dekInput.value = data.subtitle || '';
+    if (data.author) authorInput.value = data.author;
+    articleImage = data.image || '';
     status.textContent = 'Document loaded — italics and links preserved.';
     status.className = 'doc-status success';
   } catch (err) {
@@ -124,9 +128,16 @@ function basePayload() {
     article: articleText.value.trim(),
     currentTitle: titleInput.value.trim(),
     currentDek: dekInput.value.trim(),
+    author: authorInput.value.trim(),
     guidance: $('guidance').value.trim(),
   };
 }
+
+// Copy the article as formatted text (italics, links, headings) — no asterisks or brackets.
+$('copy-article-btn').addEventListener('click', e => {
+  if (!articleText.value.trim()) return;
+  window.Shared.copyMarkdownRich(articleText.value, e.currentTarget);
+});
 
 // ---------------- Headlines ----------------
 const headlinesPanel = new OptionsPanel({
@@ -143,9 +154,11 @@ const headlinesPanel = new OptionsPanel({
 const socialPanels = {};
 let currentPlatform = 'substack';
 $('social-tabs').innerHTML = Object.entries(PLATFORMS).map(([k, p]) =>
-  `<button class="tab-btn ${k === currentPlatform ? 'active' : ''}" data-platform="${k}">${esc(p.label)}</button>`).join('');
+  `<button class="tab-btn ${k === currentPlatform ? 'active' : ''}" data-platform="${k}">${esc(p.label)}</button>`).join('')
+  + `<button class="tab-btn" data-platform="igcards">IG Cards</button>`;
 $('social-panels').innerHTML = Object.keys(PLATFORMS).map(k =>
-  `<div class="social-panel ${k === currentPlatform ? '' : 'hidden'}" id="social-panel-${k}"></div>`).join('');
+  `<div class="social-panel ${k === currentPlatform ? '' : 'hidden'}" id="social-panel-${k}"></div>`).join('')
+  + `<div class="social-panel hidden" id="social-panel-igcards"></div>`;
 for (const [k, p] of Object.entries(PLATFORMS)) {
   socialPanels[k] = new OptionsPanel({
     root: $(`social-panel-${k}`),
@@ -158,6 +171,12 @@ for (const [k, p] of Object.entries(PLATFORMS)) {
     describe: o => o.text,
   });
 }
+const igPanel = new window.IGPanel({
+  root: $('social-panel-igcards'),
+  payload: () => basePayload(),
+  articleImage: () => articleImage,
+});
+
 $('social-tabs').addEventListener('click', e => {
   const btn = e.target.closest('.tab-btn');
   if (!btn) return;
@@ -167,57 +186,103 @@ $('social-tabs').addEventListener('click', e => {
 });
 
 // ---------------- Copy-edit ----------------
-let copyEdit = null; // { doc, issues, dismissed:Set }
+// Results are notes on the original text. Errors are applied by default and
+// suggestions on request; "Edited version" shows the text with those changes,
+// and both versions can be copied with formatting for Google Docs / Substack.
+let copyEdit = null; // { doc, issues, view }
+
+const canApply = i => i.start != null && !i.approximate;
+const willApply = i => canApply(i) && (i.severity === 'error' ? !i.dismissed : !!i.accepted);
+
+function editedVersion() {
+  const edits = copyEdit.issues.filter(willApply).map(i => ({ id: i.id, start: i.start, end: i.end, replacement: i.replacement }));
+  return window.LiteDoc.applyEdits(copyEdit.doc, edits);
+}
 
 function renderCopyEdit() {
-  const { doc, issues, dismissed } = copyEdit;
-  const visible = issues.filter(i => !dismissed.has(i.id));
-  const highlights = visible.filter(i => i.start != null).map(i => ({
-    start: i.start, end: i.end, id: `ce${i.id}`, label: i.id,
-    cls: i.severity === 'error' ? 'ce-error' : 'ce-suggestion',
-    title: `${i.id}. “${i.quote}” → “${i.replacement}”\n${i.explanation}`,
-  }));
-  $('copyedit-doc').innerHTML = renderDoc(doc, highlights);
-  const item = i => `<li class="issue-item ${dismissed.has(i.id) ? 'dismissed' : ''}" id="ce-item-${i.id}" data-id="${i.id}">
-      <div class="issue-head"><span class="num">${i.id}</span><span class="cat">${esc(i.category.replace('_', ' '))}</span>${i.start == null ? '<span class="cat warn">not found in text</span>' : ''}</div>
+  const { doc, issues, view } = copyEdit;
+  const edited = editedVersion();
+  document.querySelectorAll('#copyedit-toolbar .seg-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  if (view === 'edited') {
+    const byId = new Map(issues.map(i => [i.id, i]));
+    $('copyedit-doc').innerHTML = renderDoc(edited.doc, edited.ranges.map(r => {
+      const i = byId.get(r.id);
+      return { start: r.start, end: r.end, id: `ce${r.id}`, label: r.id, cls: 'ce-applied', title: `${r.id}. was “${i.quote}”\n${i.explanation}` };
+    }));
+  } else {
+    const highlights = issues.filter(i => i.start != null && !(i.severity === 'error' && i.dismissed)).map(i => ({
+      start: i.start, end: i.end, id: `ce${i.id}`, label: i.id,
+      cls: i.severity === 'error' ? 'ce-error' : `ce-suggestion${i.accepted ? ' ce-accepted' : ''}`,
+      title: `${i.id}. “${i.quote}” → “${i.replacement}”\n${i.explanation}`,
+    }));
+    $('copyedit-doc').innerHTML = renderDoc(doc, highlights);
+  }
+  const item = i => {
+    const applying = willApply(i);
+    const faded = i.severity === 'error' && i.dismissed;
+    const toggle = canApply(i)
+      ? `<button class="mini-btn ${applying ? 'on' : ''}" data-act="toggle">${applying ? '✓ In edited version' : 'Apply'}</button>`
+      : '';
+    const note = i.start == null ? '<span class="cat warn">not found in text</span>' : (i.approximate ? '<span class="cat warn">location uncertain — fix by hand</span>' : '');
+    return `<li class="issue-item ${faded ? 'dismissed' : ''} ${i.severity !== 'error' && i.accepted ? 'accepted' : ''}" id="ce-item-${i.id}" data-id="${i.id}">
+      <div class="issue-head"><span class="num">${i.id}</span><span class="cat">${esc(i.category.replace('_', ' '))}</span>${note}</div>
       <div class="issue-change"><span class="q">${esc(i.quote)}</span> → <span class="fix">${esc(i.replacement) || '<em>(delete)</em>'}</span></div>
       <div class="expl">${esc(i.explanation)}</div>
       <div class="item-actions">
+        ${toggle}
         <button class="mini-btn" data-act="copyfix">Copy fix</button>
-        <button class="mini-btn" data-act="dismiss">${dismissed.has(i.id) ? 'Restore' : 'Dismiss'}</button>
         <button class="mini-btn" data-act="rule">Don't flag this again…</button>
       </div></li>`;
+  };
   const errors = issues.filter(i => i.severity === 'error');
   const suggestions = issues.filter(i => i.severity !== 'error');
   $('copyedit-errors').innerHTML = errors.map(item).join('') || '<li class="muted">No errors found.</li>';
   $('copyedit-suggestions').innerHTML = suggestions.map(item).join('') || '<li class="muted">None.</li>';
   $('copyedit-suggestion-count').textContent = `(${suggestions.length})`;
-  const nErr = errors.filter(i => !dismissed.has(i.id)).length;
-  $('copyedit-summary').textContent = `${nErr} error${nErr === 1 ? '' : 's'} and ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}. Highlights are on your original text — hover or click one to see the note.`;
+  const nErr = errors.filter(i => !i.dismissed).length;
+  const nApplied = edited.ranges.length;
+  let summary = `${nErr} error${nErr === 1 ? '' : 's'} and ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}. The edited version includes ${nApplied} change${nApplied === 1 ? '' : 's'} — errors are in unless you turn them off; suggestions only if you click Apply.`;
+  if (edited.skipped.length) summary += ` (${edited.skipped.length} overlapping change${edited.skipped.length === 1 ? ' was' : 's were'} left out: ${edited.skipped.join(', ')}.)`;
+  $('copyedit-summary').textContent = summary;
 }
 
 async function runCopyEdit() {
   $('copyedit-section').classList.remove('hidden');
   $('copyedit-body').classList.add('hidden');
+  $('copyedit-toolbar').classList.add('hidden');
   $('copyedit-status').innerHTML = '<span class="spin-inline"></span> Copy-editing…';
   try {
     const p = basePayload();
     const data = await api('/api/copy-edit', { article: p.article, guidance: p.guidance, formatting: formattingFor(p.article), styleGuide: guideOverride('copyEdit') });
-    copyEdit = { ...data, dismissed: new Set() };
+    copyEdit = { doc: data.doc, issues: data.issues.map(i => ({ ...i, dismissed: false, accepted: false })), view: 'marked' };
     $('copyedit-status').textContent = formattingFor(p.article) === 'plain' ? 'Note: this text was pasted without formatting, so italics weren’t checked.' : '';
     $('copyedit-body').classList.remove('hidden');
+    $('copyedit-toolbar').classList.remove('hidden');
     renderCopyEdit();
   } catch (e) {
     $('copyedit-status').innerHTML = `<span class="inline-error">Copy-edit failed: ${esc(e.message)}</span>`;
   }
 }
 
+$('copyedit-toolbar').addEventListener('click', e => {
+  if (!copyEdit) return;
+  const seg = e.target.closest('.seg-btn');
+  if (seg) { copyEdit.view = seg.dataset.view; renderCopyEdit(); return; }
+  if (e.target.id === 'copy-original-btn') {
+    window.Shared.copyRich(window.LiteDoc.toHtml(copyEdit.doc), copyEdit.doc.text, e.target);
+  }
+  if (e.target.id === 'copy-edited-btn') {
+    const ed = editedVersion().doc;
+    window.Shared.copyRich(window.LiteDoc.toHtml(ed), ed.text, e.target);
+  }
+});
+
 $('copyedit-section').addEventListener('click', e => {
   const mark = e.target.closest('mark.hl, sup.hl-num');
   if (mark) {
     const id = mark.dataset.ids.split(' ')[0].replace('ce', '');
     const li = $(`ce-item-${id}`);
-    if (li) { li.scrollIntoView({ behavior: 'smooth', block: 'center' }); li.classList.add('flash'); setTimeout(() => li.classList.remove('flash'), 1200); }
+    if (li) { li.closest('details')?.setAttribute('open', ''); li.scrollIntoView({ behavior: 'smooth', block: 'center' }); li.classList.add('flash'); setTimeout(() => li.classList.remove('flash'), 1200); }
     return;
   }
   const btn = e.target.closest('[data-act]');
@@ -225,8 +290,9 @@ $('copyedit-section').addEventListener('click', e => {
   if (!btn || !li || !copyEdit) return;
   const issue = copyEdit.issues.find(i => i.id === Number(li.dataset.id));
   if (btn.dataset.act === 'copyfix') copy(issue.replacement, btn);
-  if (btn.dataset.act === 'dismiss') {
-    copyEdit.dismissed.has(issue.id) ? copyEdit.dismissed.delete(issue.id) : copyEdit.dismissed.add(issue.id);
+  if (btn.dataset.act === 'toggle') {
+    if (issue.severity === 'error') issue.dismissed = !issue.dismissed;
+    else issue.accepted = !issue.accepted;
     renderCopyEdit();
   }
   if (btn.dataset.act === 'rule') {
@@ -240,7 +306,7 @@ $('copyedit-section').addEventListener('click', e => {
 $('show-suggestions').addEventListener('change', e => $('copyedit-section').classList.toggle('hide-suggestions', !e.target.checked));
 
 // ---------------- Fact-check ----------------
-let fc = null; // { doc, claims: Map, results: Map, final }
+let fc = null; // { doc, claims: Map, results: Map, final, filter }
 const SEVERITY = { incorrect: 0, imprecise: 1, unsupported: 2 };
 const VERDICT_LABEL = { incorrect: 'Incorrect', imprecise: 'Imprecise', unsupported: 'Unsupported', correct: 'Correct', opinion: 'Opinion' };
 
@@ -260,8 +326,35 @@ function fcItem(c, r, { compact = false } = {}) {
   </li>`;
 }
 
+const FILTER_LABEL = { incorrect: 'Incorrect', imprecise: 'Imprecise', unsupported: 'Unsupported', correct: 'Checked and fine', pending: 'Being checked', legal: 'Legally sensitive', opinion: 'Opinion (not checkable)' };
+
+function claimMatches(c, filter) {
+  const r = fc.results.get(c.id);
+  if (filter === 'pending') return !r;
+  if (filter === 'legal') return !!((r && r.legal_sensitivity) || c.legal_sensitivity);
+  return !!r && r.verdict === filter;
+}
+
 function renderFactCheck() {
   const claims = [...fc.claims.values()];
+  // Legend chips double as filters, with counts
+  document.querySelectorAll('#fc-legend [data-filter]').forEach(b => {
+    const f = b.dataset.filter;
+    if (!f) { b.classList.toggle('hidden', !fc.filter); return; }
+    const n = claims.filter(c => claimMatches(c, f)).length;
+    b.querySelector('.n').textContent = n;
+    b.disabled = n === 0;
+    b.classList.toggle('active', fc.filter === f);
+    b.classList.toggle('hidden', f === 'opinion' && n === 0);
+  });
+  $('factcheck-doc').dataset.filter = fc.filter || '';
+  $('fc-default').classList.toggle('hidden', !!fc.filter);
+  $('fc-filtered').classList.toggle('hidden', !fc.filter);
+  if (fc.filter) {
+    const list = claims.filter(c => claimMatches(c, fc.filter)).sort((a, b) => (a.start ?? 1e9) - (b.start ?? 1e9));
+    $('fc-filtered-title').innerHTML = `${esc(FILTER_LABEL[fc.filter])} (${list.length}) <button class="link-btn" data-filter-reset>Show all</button>`;
+    $('fc-filtered-list').innerHTML = list.map(c => fcItem(c, fc.results.get(c.id))).join('') || '<li class="muted">None.</li>';
+  }
   const highlights = [];
   for (const c of claims) {
     if (c.start == null) continue;
@@ -272,6 +365,7 @@ function renderFactCheck() {
       start: c.start, end: c.end, id: `fc${c.id}`,
       cls: `v-${r ? r.verdict : 'pending'}${legal ? ' legal' : ''}`,
       label: r && SEVERITY[r.verdict] != null ? '!' : null,
+      // (dimmed by CSS when a different category is selected)
       title: r ? `${VERDICT_LABEL[r.verdict]}: ${r.explanation}` : 'Being checked…',
     });
   }
@@ -298,7 +392,7 @@ async function runFactCheck() {
   $('factcheck-body').classList.add('hidden');
   const status = $('factcheck-status');
   status.innerHTML = '<span class="spin-inline"></span> Starting fact-check…';
-  fc = { doc: null, claims: new Map(), results: new Map(), final: false };
+  fc = { doc: null, claims: new Map(), results: new Map(), final: false, filter: '' };
   const p = basePayload();
   let failed = false;
   try {
@@ -326,10 +420,20 @@ async function runFactCheck() {
 }
 
 $('factcheck-section').addEventListener('click', e => {
+  const chip = e.target.closest('#fc-legend [data-filter], [data-filter-reset]');
+  if (chip && fc) {
+    const f = chip.hasAttribute('data-filter-reset') ? '' : chip.dataset.filter;
+    fc.filter = fc.filter === f ? '' : f;
+    renderFactCheck();
+    return;
+  }
   const mark = e.target.closest('mark.hl, sup.hl-num');
   if (mark) {
     const id = mark.dataset.ids.split(' ')[0].replace('fc', '');
-    const li = document.querySelector(`#fc-attention #fc-item-${id}`) || document.querySelector(`#fc-item-${id}`);
+    const visibleList = fc.filter ? '#fc-filtered-list' : '#fc-attention';
+    let li = document.querySelector(`${visibleList} #fc-item-${id}`);
+    if (!li && fc.filter) { fc.filter = ''; renderFactCheck(); }
+    li = li || document.querySelector(`#fc-attention #fc-item-${id}`) || document.querySelector(`#fc-default #fc-item-${id}`);
     if (li) {
       li.closest('details')?.setAttribute('open', '');
       li.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -377,6 +481,7 @@ $('process-btn').addEventListener('click', async () => {
   if (tasks.social) {
     $('social-section').classList.remove('hidden');
     for (const panel of Object.values(socialPanels)) { panel.reset(); jobs.push(panel.generate()); }
+    jobs.push(igPanel.generate({ fresh: true }));
   }
   if (tasks.copyEdit) jobs.push(runCopyEdit());
   if (tasks.factCheck) jobs.push(runFactCheck());

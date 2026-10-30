@@ -35,13 +35,20 @@ Flag an opinion only when it rests on a factual error, or when a contested empir
 
 ## VERDICTS
 
-Give each claim exactly one verdict:
+Give each claim exactly one verdict. The verdict must rest on the pages you actually read in this session — not on memory, and not on what a source "probably" says.
 
-- **correct** — reliable sources confirm it.
-- **incorrect** — reliable sources contradict it. Give the accurate information.
-- **imprecise** — broadly right but wrong in a detail that matters (a number, date, title, or wording), or stated more strongly than the evidence supports. Give the precise version.
-- **unsupported** — you searched and could not confirm it either way, or the author's linked source doesn't back it. Say what an editor should ask the author for.
+- **correct** — a page you read confirms the claim.
+- **incorrect** — a page you read clearly states something that contradicts the claim. Give the accurate information and cite that page.
+- **imprecise** — a page you read shows the claim is substantially right but gets a specific, checkable detail wrong: a number, date, name, title, or the wording of a quote. Give the precise version and cite that page.
+- **unsupported** — the pages you read neither confirm nor contradict the claim as written. This includes:
+  - you couldn't find a source that addresses it
+  - the author's linked page doesn't contain the claim, or only partly backs it
+  - sources support a weaker or narrower version than the article states
+  - the claim depends on information you could only infer, not find
+  Say what an editor should ask the author for.
 - **opinion** — on reflection this is not a checkable factual claim.
+
+**The key rule:** "incorrect" and "imprecise" require a page you read that says something different. If the problem is that you couldn't find confirmation — or the linked source simply doesn't say it — the verdict is "unsupported," never "imprecise" or "incorrect." When in doubt between imprecise and unsupported, choose unsupported.
 
 Decide first, then write. The explanation states your conclusion and the evidence for it in one to three sentences. Do not narrate your process, do not hedge back and forth, and never flag something and then say it is actually fine — if it is fine, the verdict is "correct."
 

@@ -58,12 +58,19 @@
           <label for="current-dek">Current dek</label>
           <input type="text" id="current-dek" placeholder="Working dek, if any">
         </div>
+        <div>
+          <label for="author">Author</label>
+          <input type="text" id="author" placeholder="Author name">
+        </div>
       </div>
-      <p class="field-hint">Filled in automatically when the doc has one. Headline suggestions will never reuse it.</p>
+      <p class="field-hint">Filled in automatically when the doc has them. Headline suggestions will never reuse the current title.</p>
 
       <label for="article-text">Article text</label>
       <textarea id="article-text" placeholder="Paste the article here, or fetch it from a URL above…"></textarea>
-      <p class="field-hint" id="format-hint">Pasting from Google Docs, Word, or Substack keeps formatting: italics show as *asterisks* and links as [text](url).</p>
+      <div class="under-textarea">
+        <p class="field-hint" id="format-hint">Pasting from Google Docs, Word, or Substack keeps formatting: italics show as *asterisks* and links as [text](url).</p>
+        <button type="button" class="mini-btn" id="copy-article-btn" title="Copies with italics, bold, links and headings — pastes cleanly into Google Docs or Substack">Copy formatted text</button>
+      </div>
 
       <label for="guidance">Notes for the assistant <span class="optional">(optional — applies to every task)</span></label>
       <textarea id="guidance" class="guidance" placeholder="e.g. The piece is really about X, not Y · the author is British, keep British spelling · no puns in the headlines"></textarea>
@@ -100,6 +107,16 @@
           <h2>Copy-Edit</h2>
           <label class="checkbox-label small"><input type="checkbox" id="show-suggestions" checked> Show suggestions</label>
         </div>
+        <div id="copyedit-toolbar" class="toolbar hidden">
+          <div class="seg" role="tablist">
+            <button type="button" class="seg-btn active" data-view="marked">Marked-up original</button>
+            <button type="button" class="seg-btn" data-view="edited">Edited version</button>
+          </div>
+          <div class="toolbar-actions">
+            <button type="button" class="mini-btn" id="copy-original-btn">Copy original</button>
+            <button type="button" class="mini-btn strong" id="copy-edited-btn">Copy edited version</button>
+          </div>
+        </div>
         <div id="copyedit-status" class="section-status"></div>
         <div id="copyedit-body" class="hidden">
           <div id="copyedit-summary" class="summary-line"></div>
@@ -121,17 +138,24 @@
         <div class="result-header"><h2>Fact-Check</h2></div>
         <div id="factcheck-status" class="section-status"></div>
         <div id="factcheck-body" class="hidden">
-          <div class="legend">
-            <span class="hl v-incorrect">Incorrect</span>
-            <span class="hl v-imprecise">Imprecise</span>
-            <span class="hl v-unsupported">Unsupported</span>
-            <span class="hl v-correct">Checked &amp; fine</span>
-            <span class="hl v-pending">Being checked</span>
-            <span class="hl legal">Legally sensitive</span>
+          <div class="legend" id="fc-legend">
+            <button type="button" class="hl v-incorrect" data-filter="incorrect">Incorrect <span class="n"></span></button>
+            <button type="button" class="hl v-imprecise" data-filter="imprecise">Imprecise <span class="n"></span></button>
+            <button type="button" class="hl v-unsupported" data-filter="unsupported">Unsupported <span class="n"></span></button>
+            <button type="button" class="hl v-correct" data-filter="correct">Checked &amp; fine <span class="n"></span></button>
+            <button type="button" class="hl v-pending" data-filter="pending">Being checked <span class="n"></span></button>
+            <button type="button" class="hl legal" data-filter="legal">Legally sensitive <span class="n"></span></button>
+            <button type="button" class="hl v-opinion" data-filter="opinion">Opinion <span class="n"></span></button>
+            <button type="button" class="legend-reset hidden" data-filter="">Show all</button>
           </div>
           <div class="split">
             <div id="factcheck-doc" class="output-box doc-view" tabindex="0"></div>
-            <div class="side-list">
+            <div class="side-list" id="fc-side">
+              <div id="fc-filtered" class="hidden">
+                <h3 id="fc-filtered-title"></h3>
+                <ol id="fc-filtered-list" class="issue-list"></ol>
+              </div>
+              <div id="fc-default">
               <h3>Needs attention <span id="fc-attn-count"></span></h3>
               <ol id="fc-attention" class="issue-list"></ol>
               <details id="fc-legal-wrap">
@@ -143,6 +167,7 @@
                 <summary>Checked and fine <span id="fc-fine-count"></span></summary>
                 <ol id="fc-fine" class="issue-list compact"></ol>
               </details>
+              </div>
             </div>
           </div>
         </div>
@@ -153,7 +178,10 @@
     <footer id="footer" class="footer"></footer>
   </div>
 
+  <script src="/lib/doc.js"></script>
   <script src="shared.js"></script>
+  <script src="ig/cards.js"></script>
+  <script src="ig/ig-panel.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
