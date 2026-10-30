@@ -146,10 +146,10 @@ const { callClaude, extractJson, webTools, retrievedSources, normalizeUrl, tierI
 const storage = require('./lib/storage');
 const rules = require('./lib/rules');
 const modelcheck = require('./lib/modelcheck');
-const { parseLite, locate, linksIn, guessTitle } = require('./lib/doc');
+const { parseLite, locate, linksIn, guessTitle, stripMarkup } = require('./lib/doc');
 const { htmlToLite } = require('./lib/richtext');
 const { notificationsConfigured } = require('./lib/notify');
-const { tooSimilar, editorNotes, roundsBlock, steeringInstructions } = require('./lib/options');
+const { tooSimilar, editorNotes, roundsBlock, steeringInstructions, revisionBlock } = require('./lib/options');
 
 // Which model tier and how much thinking each task gets. "standard" is the
 // current Opus; "top" is the current Fable (used for the optional deep fact-check).
@@ -317,6 +317,8 @@ async function fetchSubstack(url) {
   let bodyHtml = '';
   let title = '';
   let subtitle = '';
+  let author = '';
+  let image = '';
 
   $('script').each((i, el) => {
     if (bodyHtml) return;
@@ -331,6 +333,8 @@ async function fetchSubstack(url) {
         bodyHtml = post.body_html;
         title = post.title || '';
         subtitle = post.subtitle || '';
+        author = (post.publishedBylines || []).map(b => b && b.name).filter(Boolean).join(' and ');
+        image = post.cover_image || '';
       }
     } catch (e) {
       console.log('Substack preload parse failed:', e.message);
@@ -345,11 +349,13 @@ async function fetchSubstack(url) {
     title = title || $('h1.post-title').text().trim() || $('h1').first().text().trim();
     subtitle = subtitle || $('h3.subtitle').first().text().trim();
   }
+  image = image || $('meta[property="og:image"]').attr('content') || '';
+  author = author || $('meta[name="author"]').attr('content') || '';
   if (!bodyHtml) throw new Error('Could not extract article content. Make sure this is a public or shared Substack post.');
 
   const body = htmlToLite(bodyHtml).text;
   const head = [title ? `# ${title}` : '', subtitle].filter(Boolean).join('\n\n');
-  return { text: head ? `${head}\n\n${body}` : body, title, subtitle };
+  return { text: head ? `${head}\n\n${body}` : body, title, subtitle, author, image };
 }
 
 async function fetchGoogleDoc(url) {
@@ -364,11 +370,15 @@ async function fetchGoogleDoc(url) {
   if (!response.ok) {
     throw new Error(`Failed to fetch document: ${response.status}. Make sure the document is shared with "Anyone with the link".`);
   }
-  const converted = htmlToLite(await response.text());
+  const html = await response.text();
+  const converted = htmlToLite(html);
+  const img = cheerio.load(html)('img').first().attr('src') || '';
   return {
     text: converted.text,
     title: converted.title || guessTitle(converted.text),
     subtitle: converted.subtitle,
+    author: '',
+    image: /^https?:\/\//.test(img) ? img : '',
   };
 }
 
@@ -379,12 +389,45 @@ app.post('/api/fetch-doc', async (req, res) => {
   try {
     const isSubstack = url.includes('substack.com') || /https?:\/\/[^/]+\.[^/]+\/p\//.test(url) || url.includes('persuasion.community');
     const result = isSubstack && !url.includes('docs.google.com') ? await fetchSubstack(url.trim()) : await fetchGoogleDoc(url.trim());
-    res.json({ content: result.text, title: result.title, subtitle: result.subtitle, formatting: 'rich' });
+    res.json({ content: result.text, title: result.title, subtitle: result.subtitle, author: result.author || '', image: result.image || '', formatting: 'rich' });
   } catch (error) {
     console.error('Fetch doc error:', error);
     res.status(error.status || 500).json({ error: error.message });
   }
 });
+
+// Images for IG cards must be same-origin so the browser can export the card.
+// This fetches a public image (e.g. the article's Substack cover) on the
+// server's behalf.
+function isPublicHttpUrl(u) {
+  let x;
+  try { x = new URL(u); } catch (_) { return false; }
+  if (!/^https?:$/.test(x.protocol)) return false;
+  const h = x.hostname.toLowerCase();
+  if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal') || /^\[/.test(h)) return false;
+  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h)) return false;
+  return true;
+}
+
+app.get('/api/image-proxy', async (req, res) => {
+  const url = String(req.query.url || '');
+  if (!isPublicHttpUrl(url)) return res.status(400).json({ error: 'Not a public image URL' });
+  try {
+    const r = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'Mozilla/5.0 (Persuasion editorial assistant)' } });
+    const type = r.headers.get('content-type') || '';
+    if (!r.ok || !type.startsWith('image/')) return res.status(400).json({ error: `Could not load that image (${r.status}).` });
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 20 * 1024 * 1024) return res.status(400).json({ error: 'Image is too large (max 20 MB).' });
+    res.setHeader('Content-Type', type);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buf);
+  } catch (e) {
+    res.status(400).json({ error: `Could not load that image: ${e.message}` });
+  }
+});
+
+// Shared text utilities, also used in the browser (formatted copy, applying fixes).
+app.get('/lib/doc.js', (req, res) => res.sendFile(path.join(__dirname, 'lib', 'doc.js')));
 
 // API: Convert pasted HTML (from Google Docs, Word, Substack...) to text with
 // *italics* and [links](url) preserved.
@@ -484,7 +527,7 @@ async function generateSocial(body) {
   const ask = variantOf
     ? `Write 3 new ${p.label} posts that are variations on the post in <more_like_this>.`
     : `Write 3 distinct ${p.label} posts promoting this article, each taking a different angle or structure.`;
-  const prompt = `<article>\n${article}\n</article>\n${currentTitle ? `\n<article_title>${currentTitle}</article_title>\n` : ''}${editorNotes(guidance)}${roundsBlock(history, describe)}${steeringInstructions({ feedback, variantOf, pinned, describe })}
+  const prompt = `<article>\n${article}\n</article>\n${currentTitle ? `\n<article_title>${currentTitle}</article_title>\n` : ''}${body.author ? `<author>${body.author}</author>\n` : ''}${editorNotes(guidance)}${roundsBlock(history, describe)}${steeringInstructions({ feedback, variantOf, pinned, describe })}
 ${ask}
 
 Platform: ${p.label}. Follow the ${p.label} section of the style guide. Hard length limit: ${p.limit} characters per post. Never include a URL or link placeholder. Never repeat a previous or pinned post.`;
@@ -514,6 +557,96 @@ app.post('/api/social', async (req, res) => {
     res.json({ options: options.map(o => ({ text: o.text, overLimit: o.text.length > limit })), limit });
   } catch (error) {
     console.error('Social error:', error);
+    res.status(500).json({ error: errorMessage(error) });
+  }
+});
+
+// ==================== IG CARDS ====================
+// Content for an Instagram carousel: a cover (title + byline + photo), 2-4
+// content cards, and a closing card. The client renders the images; the server
+// picks the content and checks that quotes are verbatim and numbers appear in
+// the article.
+
+const IG_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Cover title, at most ~70 characters' },
+    author: { type: 'string', description: 'Author name, or empty string if unknown' },
+    cards: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['quote', 'stat', 'point'] },
+          text: { type: 'string' },
+          highlight: { type: 'string', description: 'A 2-8 word phrase copied exactly from text, or empty string' },
+          stat: { type: 'string', description: 'For stat cards: the figure, e.g. "34%" or "8 in 10"; otherwise empty string' },
+          attribution: { type: 'string', description: 'For quote cards: who said it (the author, unless the passage quotes someone else); otherwise empty string' },
+        },
+        required: ['kind', 'text', 'highlight', 'stat', 'attribution'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['title', 'author', 'cards'],
+  additionalProperties: false,
+};
+
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, twenty: 20, thirty: 30, forty: 40, fifty: 50, hundred: 100 };
+function numbersIn(str) {
+  const s = String(str).toLowerCase().replace(/,(?=\d{3})/g, '');
+  const out = new Set((s.match(/\d+(?:\.\d+)?/g) || []));
+  for (const [w, n] of Object.entries(NUMBER_WORDS)) if (new RegExp(`\\b${w}\\b`).test(s)) out.add(String(n));
+  return out;
+}
+
+function summarizeCardSet(set) {
+  return [`Title: ${set.title}`, ...(set.cards || []).map(c => `${c.kind}: ${c.stat ? c.stat + ' — ' : ''}${c.text}`)].join('\n');
+}
+
+app.post('/api/ig-cards', async (req, res) => {
+  const { article, currentTitle, author, guidance, history, feedback } = req.body || {};
+  const count = Math.min(6, Math.max(4, Number(req.body?.count) || 5));
+  if (!article || !article.trim()) return res.status(400).json({ error: 'Article text is required' });
+  const contentCards = count - 2;
+  try {
+    const system = `You create Instagram carousel cards for Persuasion, a magazine defending liberal democracy and open debate. The cards should make a scrolling reader stop, get the essay's core idea in a few seconds, and want to read the whole piece.\n\n${dateContext()}${await rules.rulesForPrompt('social')}`;
+    const prompt = `<article>
+${article}
+</article>
+${currentTitle ? `\n<title>${currentTitle}</title>\nUse this as the cover title (you may shorten it only if it's over 70 characters).\n` : '\nThere is no title yet: write a short, strong cover title (title case, under 70 characters).\n'}${author ? `<author>${author}</author>\n` : '\nInfer the author from the text if it is stated; otherwise use an empty string.\n'}${editorNotes(guidance)}${revisionBlock(history, feedback)}
+Write exactly ${contentCards} content cards for a ${count}-card carousel (the cover and closing card are added automatically). Order them so they build: hook first, then evidence or argument, ending on the strongest line.
+
+Card kinds:
+- "quote": a passage copied EXACTLY from the article — same words, same punctuation, contiguous, no ellipses, no changes. 12-40 words; shorter is better. It must make sense on its own. attribution = the author, unless the passage is itself quoting someone else, in which case attribution = that person (e.g. "Neil Gross").
+- "stat": only when the article reports a striking number. stat = the figure as it should appear big (e.g. "34%", "8 in 10", "600+"); text = one plain sentence (max 30 words) explaining it, using only facts stated in the article.
+- "point": the essay's argument in one punchy sentence (max 25 words), in Persuasion's voice. Not presented as a quotation.
+
+Use at most one stat card and at most one point card; the rest should be quotes. For each card, highlight = the 2-8 word phrase that should be emphasized, copied exactly from text (or empty string).
+Never invent facts. Keep any *italic* markup (e.g. book titles) exactly as in the article.`;
+
+    const { json } = await callClaude({ task: 'ig-cards', tier: 'standard', effort: 'high', system, prompt, schema: IG_SCHEMA, maxTokens: 12000 });
+    const doc = parseLite(article);
+    const articleNumbers = numbersIn(doc.text);
+    const cards = (json.cards || []).slice(0, contentCards).map(c => {
+      const kind = ['quote', 'stat', 'point'].includes(c.kind) ? c.kind : 'point';
+      const text = String(c.text || '').trim();
+      const plainText = stripMarkup(text);
+      const hl = String(c.highlight || '').trim();
+      const card = {
+        kind,
+        text,
+        highlight: hl && plainText.toLowerCase().includes(stripMarkup(hl).toLowerCase()) ? stripMarkup(hl) : '',
+        stat: kind === 'stat' ? String(c.stat || '').trim() : '',
+        attribution: kind === 'quote' ? String(c.attribution || '').trim() : '',
+      };
+      if (kind === 'quote') card.verbatim = !!locate(doc, text) && !(locate(doc, text) || {}).approximate;
+      if (kind === 'stat') card.verified = [...numbersIn(card.stat)].every(n => articleNumbers.has(n));
+      return card;
+    });
+    res.json({ result: { title: (currentTitle && currentTitle.length <= 90) ? currentTitle : json.title, author: author || json.author || '', cards } });
+  } catch (error) {
+    console.error('IG cards error:', error);
     res.status(500).json({ error: errorMessage(error) });
   }
 });
@@ -740,7 +873,7 @@ Check each claim above, following the guide. For a claim with an author's linked
 When you have finished checking, reply with ONLY a JSON object in a \`\`\`json code block, in this shape:
 {"results": [{"id": <claim number>, "verdict": "correct|incorrect|imprecise|unsupported|opinion", "explanation": "<1-3 sentences: your conclusion and the evidence>", "correction": "<the accurate version, or empty string>", "sources": [{"url": "<a page you actually read or found in search>", "title": "<page title>"}], "legal_sensitivity": <true|false>}]}
 
-Include every claim number exactly once. The explanation must state only your final conclusion — no back-and-forth, and never a flag that you then retract.`;
+Verdict rules: "incorrect" and "imprecise" require a page you read that states something different — cite it in sources. If you simply couldn't confirm the claim, or the author's linked page doesn't say it, the verdict is "unsupported" (never "imprecise"). Include every claim number exactly once. The explanation must state only your final conclusion — no back-and-forth, and never a flag that you then retract.`;
 
   const task = deep ? TASKS.factVerifyDeep : TASKS.factVerify;
   const result = await callClaude({
@@ -770,11 +903,21 @@ Include every claim number exactly once. The explanation must state only your fi
       const hit = retrieved.get(normalizeUrl(s.url));
       if (hit && !sources.some(x => normalizeUrl(x.url) === normalizeUrl(hit.url))) sources.push({ url: hit.url, title: s.title || hit.title });
     }
+    let verdict = VERDICTS.includes(String(r.verdict).toLowerCase()) ? String(r.verdict).toLowerCase() : 'unsupported';
+    let explanation = r.explanation || '';
+    let correction = r.correction || '';
+    // "Incorrect"/"imprecise" need a page the checker actually read. Without
+    // one, it's an unconfirmed claim, not a demonstrated error.
+    if ((verdict === 'incorrect' || verdict === 'imprecise') && sources.length === 0) {
+      verdict = 'unsupported';
+      explanation = `No page the checker read confirms this. ${explanation}`.trim();
+      if (correction) { explanation += ` (Checker's suspicion: ${correction})`; correction = ''; }
+    }
     return {
       id: c.id,
-      verdict: VERDICTS.includes(String(r.verdict).toLowerCase()) ? String(r.verdict).toLowerCase() : 'unsupported',
-      explanation: r.explanation || '',
-      correction: r.correction || '',
+      verdict,
+      explanation,
+      correction,
       sources,
       legal_sensitivity: !!(r.legal_sensitivity || c.legal_sensitivity),
     };
@@ -792,7 +935,8 @@ ${flagged.map(r => {
     return `[${r.id}] Claim: ${c.claim}\nArticle wording: "${c.quote}"\nVerdict: ${r.verdict}\nExplanation: ${r.explanation}${r.correction ? `\nCorrection: ${r.correction}` : ''}\nSources: ${r.sources.map(s => s.url).join(', ') || 'none'}`;
   }).join('\n\n')}
 
-For each flag, decide whether it should go to the author.
+For each flag, decide whether it should go to the author, and with which verdict.
+Verdict check: "incorrect" or "imprecise" is only right when a cited page states something different from the article. If the explanation shows the problem is missing confirmation — the source doesn't mention it, only partly backs it, or supports a weaker version — change the verdict to "unsupported".
 Set keep_flag to false if: the explanation itself indicates the claim is accurate or substantially accurate; the problem is an immaterial quibble; the "claim" is really opinion, interpretation, or hyperbole; or the only basis for doubt is not recognizing a recent event.
 For flags you keep, you may adjust the verdict, and rewrite the explanation so it states only the conclusion and the evidence in 1-3 sentences, without hedging or narrating the checking process. For flags you drop, set verdict to "correct" (or "opinion" if it isn't a factual claim) and give a one-sentence explanation.
 Return a review for every flag id.`;
@@ -802,11 +946,19 @@ Return a review for every flag id.`;
     return results.map(r => {
       const rev = reviews.get(r.id);
       if (!rev || !flagged.includes(r)) return r;
+      let v = rev.keep_flag ? (VERDICTS.includes(String(rev.verdict).toLowerCase()) ? String(rev.verdict).toLowerCase() : r.verdict) : (String(rev.verdict).toLowerCase() === 'opinion' ? 'opinion' : 'correct');
+      let explanation = rev.explanation || r.explanation;
+      let correction = rev.keep_flag ? (rev.correction || r.correction) : '';
+      if ((v === 'incorrect' || v === 'imprecise') && !r.sources.length) {
+        v = 'unsupported';
+        if (!/^No page the checker read/.test(explanation)) explanation = `No page the checker read confirms this. ${explanation}`;
+        if (correction) { explanation += ` (Checker's suspicion: ${correction})`; correction = ''; }
+      }
       return {
         ...r,
-        verdict: rev.keep_flag ? (VERDICTS.includes(String(rev.verdict).toLowerCase()) ? String(rev.verdict).toLowerCase() : r.verdict) : (String(rev.verdict).toLowerCase() === 'opinion' ? 'opinion' : 'correct'),
-        explanation: rev.explanation || r.explanation,
-        correction: rev.keep_flag ? (rev.correction || r.correction) : '',
+        verdict: v,
+        explanation,
+        correction,
         reviewed: true,
       };
     });

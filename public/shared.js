@@ -45,6 +45,54 @@
     }
   };
 
+  function flash(btn, label) {
+    if (!btn) return;
+    const old = btn.dataset.label || btn.textContent;
+    btn.dataset.label = old;
+    btn.textContent = label || 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1400);
+  }
+
+  // Copy formatted text (italics, bold, links, headings) so it pastes cleanly
+  // into Google Docs or Substack — no asterisks or brackets.
+  Shared.copyRich = async function (html, plain, btn) {
+    const wrapped = `<meta charset="utf-8"><div>${html}</div>`;
+    try {
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([wrapped], { type: 'text/html' }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+        })]);
+        flash(btn);
+        return true;
+      }
+    } catch (_) { /* fall through */ }
+    // Fallback: select a hidden rendered copy and use the legacy copy command.
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    holder.setAttribute('contenteditable', 'true');
+    holder.style.cssText = 'position:fixed;left:-9999px;top:0;white-space:normal;';
+    document.body.appendChild(holder);
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+    sel.removeAllRanges();
+    holder.remove();
+    flash(btn, ok ? 'Copied!' : 'Copy failed');
+    return ok;
+  };
+
+  // Copy lite-markdown (*italic*, **bold**, [link](url), # headings) as formatted text.
+  Shared.copyMarkdownRich = function (markdown, btn) {
+    const doc = window.LiteDoc.parseLite(markdown);
+    return Shared.copyRich(window.LiteDoc.toHtml(doc), doc.text, btn);
+  };
+
   Shared.copy = function (text, btn) {
     navigator.clipboard.writeText(text).then(() => {
       if (!btn) return;
@@ -292,7 +340,10 @@
         const fb = this.root.querySelector('.feedback-input')?.value || '';
         Shared.openRuleModal({ scope: this.scope, text: fb, context: this.current() ? this.summarize(this.current().result).slice(0, 1500) : '' });
       }
-      if (act === 'copy-current' && this.current()) Shared.copy(this.copyText(this.current().result), btn);
+      if (act === 'copy-current' && this.current()) {
+        const t = this.copyText(this.current().result);
+        if (this.copyRich && window.LiteDoc) Shared.copyMarkdownRich(t, btn); else Shared.copy(t, btn);
+      }
       if (this.onAction) this.onAction(act, btn, this);
     }
   }
