@@ -41,9 +41,13 @@ Only when the article genuinely explores an open question:
 ### What to Avoid
 - Clickbait formulas ("You Won't Believe...", "X Things That...")
 - Excessive punctuation or ALL CAPS
-- Puns or wordplay (unless genuinely clever and relevant)
+- Puns or wordplay that isn't genuinely clever and relevant (the Creative option may take wordplay risks; the others shouldn't lean on it)
+- Reusing the article's current working title, or a light rewording of it — every suggestion must be new
 - Vague abstractions that don't signal the article's argument
 - Headlines that could apply to any publication
+
+### Capitalization: Title Case (house style)
+Persuasion headlines use title case, not AP's sentence case. Capitalize every word except articles (a, an, the), coordinating conjunctions (and, but, or, nor, for, so, yet), and prepositions of three letters or fewer (as, at, by, for, in, of, off, on, out, per, to, up, via) — unless that word comes first or last. Verbs are always capitalized, including short ones ("Is," "Are," "Be"). Deks are in sentence case and end with a period.
 
 ### Length
 - Aim for 4-8 words

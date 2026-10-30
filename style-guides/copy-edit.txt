@@ -1,203 +1,78 @@
-# PERSUASION COPY-EDITING STYLE GUIDE
+# PERSUASION COPY-EDITING GUIDE
 
-## Overview
-Persuasion publishes intellectually serious essays on politics, culture, and society from a philosophically liberal perspective. Copy-editing should preserve authorial voice while ensuring clarity, accuracy, and consistency.
-
----
-
-## GENERAL PRINCIPLES
-
-### Preserve Voice
-- Persuasion publishes distinctive voices—don't flatten them
-- Maintain the author's rhetorical style and characteristic phrasings
-- Fix errors; don't rewrite for style preference
-- When in doubt, flag for the author rather than silently changing
-
-### Prioritize Clarity
-- Ensure arguments are logically structured
-- Flag unclear antecedents, ambiguous phrases, or confusing transitions
-- Break up sentences only when genuinely hard to follow
-- Complex ideas can have complex sentences—that's fine if they're well-constructed
-
-### Maintain Intellectual Rigor
-- Verify that claims are appropriately qualified
-- Flag overstatements or unsupported assertions
-- Ensure quotations are accurate and properly attributed
-- Check that technical or specialized terms are used correctly
+Persuasion publishes intellectually serious essays on politics, culture, and society. The copy editor's job is to catch errors and enforce house style while preserving the author's voice. Fix what is wrong; do not rewrite what is merely different from how you would have written it.
 
 ---
 
-## MECHANICAL STANDARDS
+## BASE STYLE: AP, WITH HOUSE EXCEPTIONS
 
-### Spelling & Usage
-- American English spelling (honor, color, recognize)
-- "While" for simultaneity; "although" or "whereas" for contrast (flexible)
-- Serial comma (Oxford comma): "France, Germany, and Italy"
+Persuasion follows the AP Stylebook, except where the house rules below differ. Where they conflict, the house rule wins.
 
-### Punctuation
+### House exceptions to AP (always follow these)
+- **Serial (Oxford) comma:** always. "France, Germany, and Italy."
+- **Titles of long works are italicized:** books, newspapers, magazines, journals, films, TV and radio shows, podcasts, plays, albums, long poems, and works of art: *The Atlantic*, *The New York Times*, *The Identity Trap*, *The Good Fight*. (AP's quotation marks for these do not apply.)
+- **Titles of short works take quotation marks:** articles, essays, chapters, episodes, songs, short poems: "The End of History?"
+- **Em dashes are closed (no spaces):** "The claim—however dubious—was repeated." Do not flag closed em dashes, and do flag spaced ones ( — ) for closing.
+- **Months are spelled out in dates:** "January 6, 2021," not "Jan. 6, 2021." No ordinals ("January 6," not "January 6th").
+- **Headlines are in title case** (handled by the headline tool; don't flag title case in the article's own headline).
 
-**Em-dashes:**
-- Use without spaces: "The claim—however dubious—was repeated"
-- Use for parenthetical insertions, abrupt breaks, or emphasis
-- Don't overuse; more than two per paragraph may be excessive
-
-**Quotation marks:**
-- Double quotes for direct quotations
-- Single quotes for quotes within quotes
-- Periods and commas inside closing quotation marks
-- Colons and semicolons outside
-
-**Ellipses:**
-- Three dots with spaces: ". . ." for omissions in quotations
-- Or three dots without spaces "..." for trailing off
-
-### Numbers
-- Spell out one through nine; use figures for 10 and above
-- Spell out numbers that begin sentences
-- Use figures for percentages: "5 percent" or "5%"
-- Dates: "January 6, 2021" (not "January 6th, 2021")
-
-### Capitalization
-- Lowercase "president," "senator," etc. when not preceding a name
-- "President Biden" but "the president said"
-- Capitalize formal titles of legislation, court cases, institutions
-- "the Supreme Court" but "the court ruled"
-
-### Titles of Works
-- Italicize book titles, magazine/newspaper names, films
-- Use quotation marks for article titles, essay titles, song titles
-- *The Atlantic*, *The New York Times*
-- "The End of History?" (article)
+### AP rules to apply
+- Numbers: spell out one through nine; figures for 10 and above. Spell out a number that begins a sentence. Ages, percentages, dollar amounts, and dimensions always take figures ("5 years old," "$3 million," "4%").
+- Percentages: "5%" (AP) and "5 percent" are both acceptable — flag only inconsistency within one article.
+- Titles of people: capitalize a formal title directly before a name ("President Lincoln"); lowercase it otherwise ("the president said"). Courtesy titles (Mr./Ms.) are not used.
+- Abbreviations: "U.S." with periods in body text; spell out a lesser-known acronym on first reference.
+- Quotation marks: double quotes, single quotes for quotes within quotes. Periods and commas go inside closing quotation marks; colons and semicolons outside; question marks and exclamation points depend on meaning.
+- Ellipses: three periods (...), no spaces between them.
+- Spelling: American English (Merriam-Webster). "Toward" and "towards" are both acceptable — never flag either.
+- Hyphenation of compound modifiers before a noun ("a well-known writer"), but not after "very" or "-ly" adverbs ("a highly regarded scholar").
+- Common AP spellings: "website," "email," "health care" (noun), "nonprofit."
 
 ---
 
-## MULTILINGUAL ARTICLES
+## HOW THE TEXT IS FORMATTED
 
-Persuasion occasionally publishes articles in languages other than English (e.g., German, French, Spanish). When copy-editing non-English articles:
+The article you receive uses light markup:
+- *text between single asterisks* is italic
+- **text between double asterisks** is bold
+- [link text](url) is a hyperlink
+- lines starting with "#" are headings, ">" are block quotes
 
-- Apply the spirit of this style guide to the target language
-- Do NOT repeatedly flag that the article is in a different language—this is intentional
-- Focus on grammar, punctuation, and clarity issues within that language
-- Flag factual concerns, logical issues, and sensitivity concerns as you would for English articles
-- Maintain the same intellectual rigor and voice-preservation principles
-- For punctuation conventions that differ by language (e.g., French spacing around punctuation, German quotation marks), follow the conventions of the article's language
-
----
-
-## DATE HANDLING
-
-**IMPORTANT**: This style guide was composed in January 2026. The copy-edit check may be run at any point in 2026 or later.
-
-- Do NOT flag dates in 2025 or 2026 as incorrect or "in the future"
-- Do NOT assume the current date is in 2024—the AI model's training cutoff does not reflect the actual date
-- When articles reference recent events (2025, 2026), treat these as contemporary, not future-dated
-- Only flag dates that are genuinely implausible or contain obvious errors (e.g., "February 30" or historical events with wrong years)
+If the input says formatting was captured, this markup is reliable: a publication name shown as *The Atlantic* IS italicized — never flag it as missing italics. If the input says formatting was NOT captured (plain paste), you cannot see italics at all, so never flag missing or wrong italics.
 
 ---
 
-## COMMON ISSUES TO FLAG
+## WHAT TO FLAG
 
-### Factual Concerns
-- Statistics or figures that seem off
-- Dates that are genuinely implausible (but see DATE HANDLING section—do not flag 2025/2026 dates as "future")
-- Quotations that may be paraphrased rather than exact
-- Claims about what someone said or did without citation
-- Historical claims that may be contested
+**Errors** (objective problems — always flag):
+- Spelling and typos, including misspelled names
+- Grammar: agreement, tense, pronoun reference, dangling modifiers, wrong word ("affect/effect," "principle/principal")
+- Punctuation mistakes
+- Violations of the house style and AP rules above
+- Inconsistencies within the article (a name spelled two ways, "5%" in one place and "5 percent" in another, mixed spelling conventions)
+- Missing words, doubled words, broken sentences
 
-### Logical Issues
-- Non sequiturs or gaps in argument
-- Contradictions within the piece
-- Overgeneralizations ("Everyone agrees that...")
-- False dichotomies
-
-### Style Issues
-- Excessive passive voice when active would be clearer
-- Unnecessarily jargon-heavy passages
-- Sentences that require re-reading to parse
-- Repetitive phrasing or word echoes
-
-### Sensitivity Flags
-- Potentially defamatory statements about named individuals
-- Unverified claims about private figures
-- Legal claims that may need review
+**Suggestions** (optional — flag sparingly, at most about eight per article):
+- A sentence that genuinely needs re-reading to parse
+- An unclear pronoun or antecedent
+- An accidental word echo (same distinctive word twice in close succession)
+Only suggest when the improvement is clear-cut. Put the suggested rewrite of the quoted words in the suggestion.
 
 ---
 
-## POLITICAL & EDITORIAL SENSITIVITIES
+## WHAT NOT TO FLAG
 
-### Persuasion's Voice
-Persuasion is philosophically liberal (in the classical sense):
-- Defends free speech, due process, individual rights
-- Skeptical of authoritarianism from left or right
-- Values good-faith disagreement and persuasion over trolling
-- Takes democracy and its institutions seriously
+- Factual accuracy, dates, statistics, or whether claims are supported — the fact-checker handles those
+- Stylistic choices that are not errors: sentences starting with "And" or "But," sentence fragments used for effect, split infinitives, singular "they," one-sentence paragraphs, rhetorical questions, intentional repetition, long but well-built sentences, contractions
+- The author's word choices, tone, or argument, unless something is actually wrong
+- Text inside direct quotations, beyond obvious typos (never "correct" what someone said)
+- British spelling in a piece that uses it consistently: raise it once as a single suggestion, not word by word
+- Dates or events from recent years because you don't recognize them
+- Anything you are not confident is wrong
 
-### Balance
-- Don't insert false balance into clearly argued opinion pieces
-- Authors are allowed to take positions
-- But ensure factual claims are accurate regardless of political valence
-- Flag partisan framing that may undermine credibility
-
-### Sensitive Topics
-When articles address contentious issues (identity politics, cancel culture, populism, etc.):
-- Ensure characterizations of opposing views are fair
-- Flag strawman arguments
-- Verify that examples and evidence are accurately described
-- Watch for loaded language that may alienate persuadable readers
+When in doubt, leave it out. A short list of real problems is far more useful than a long list padded with matters of taste.
 
 ---
 
-## FORMATTING FOR SUBSTACK
+## NON-ENGLISH ARTICLES
 
-### Structure
-- Clear paragraph breaks (not overly long paragraphs)
-- Subheadings for longer pieces (##)
-- Block quotes for extended quotations
-- Hyperlinks for sources and references
-
-### Links
-- Link to primary sources when possible
-- Ensure links work and go to intended destinations
-- Link text should be descriptive (not "click here")
-
-### Images
-- Ensure proper attribution/credit
-- Alt text for accessibility
-- Appropriate sizing
-
----
-
-## COPY-EDIT OUTPUT FORMAT
-
-When flagging issues, use this format:
-
-**ERROR TYPE: [Category]**
-- Original: "[quoted text with issue]"
-- Suggested: "[corrected text]"
-- Reason: [brief explanation]
-
-Categories:
-- SPELLING
-- GRAMMAR
-- PUNCTUATION
-- STYLE
-- FACTUAL
-- CLARITY
-- LOGIC
-- FLAG FOR AUTHOR
-
----
-
-## CHECKLIST BEFORE PUBLISHING
-
-- [ ] Spelling and grammar checked
-- [ ] Punctuation consistent throughout
-- [ ] Numbers formatted consistently
-- [ ] Names spelled correctly
-- [ ] Titles properly formatted (italics/quotes)
-- [ ] Links working
-- [ ] Quotations verified where possible
-- [ ] No unintentional repetition
-- [ ] Opening paragraph compelling
-- [ ] Closing paragraph satisfying
-- [ ] Headline and dek accurate to content
+Persuasion occasionally publishes in other languages. Apply the spirit of this guide using that language's conventions (e.g. French spacing before punctuation, German quotation marks). Never flag that the article is not in English.

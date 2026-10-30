@@ -1,5 +1,4 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
 const cookieSession = require('cookie-session');
 const cheerio = require('cheerio');
 const path = require('path');
@@ -142,12 +141,35 @@ function parsePercent(str) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const anthropic = new Anthropic();
+// ==================== AI SETUP ====================
+const { callClaude, extractJson, webTools, retrievedSources, normalizeUrl, tierInfo, setUsageSink, dateContext } = require('./lib/claude');
+const storage = require('./lib/storage');
+const rules = require('./lib/rules');
+const modelcheck = require('./lib/modelcheck');
+const { parseLite, locate, linksIn, guessTitle } = require('./lib/doc');
+const { htmlToLite } = require('./lib/richtext');
+const { notificationsConfigured } = require('./lib/notify');
+const { tooSimilar, editorNotes, roundsBlock, steeringInstructions } = require('./lib/options');
 
-// Model selection — the API has no floating "latest" alias, so versions are pinned here.
-// Update these two lines to swap model versions across the whole app.
-const MODEL_SONNET = 'claude-sonnet-4-6'; // bulk tasks: copy-edit, fact-check, flag-claims, social
-const MODEL_OPUS = 'claude-opus-4-8';     // premium tasks: headline/dek generation
+// Which model tier and how much thinking each task gets. "standard" is the
+// current Opus; "top" is the current Fable (used for the optional deep fact-check).
+const TASKS = {
+  headlines: { tier: 'standard', effort: 'high' },
+  social: { tier: 'standard', effort: 'medium' },
+  copyEdit: { tier: 'standard', effort: 'high' },
+  factExtract: { tier: 'standard', effort: 'medium' },
+  factVerify: { tier: 'standard', effort: 'high' },
+  factVerifyDeep: { tier: 'top', effort: 'high' },
+  factReview: { tier: 'standard', effort: 'medium' },
+  repairJson: { tier: 'fast', effort: 'low' },
+};
+
+const PLATFORMS = {
+  substack: { label: 'Substack Notes', limit: 1500 },
+  twitter: { label: 'X', limit: 256 },
+  linkedin: { label: 'LinkedIn', limit: 1300 },
+  instagram: { label: 'Instagram', limit: 2200 },
+};
 
 // Session middleware
 app.use(cookieSession({
@@ -227,7 +249,7 @@ app.use((req, res, next) => {
   if (req.session.authenticated) {
     next();
   } else {
-    if (req.path === '/' || req.path.endsWith('.html')) {
+    if (req.path === '/' || req.path === '/admin' || req.path === '/rules' || req.path.endsWith('.html')) {
       res.redirect('/login');
     } else if (req.path.startsWith('/api/')) {
       res.status(401).json({ error: 'Not authenticated' });
@@ -238,6 +260,9 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+app.get('/rules', (req, res) => res.sendFile(path.join(__dirname, 'public', 'rules.html')));
 
 // Load style guides
 const styleGuidesDir = path.join(__dirname, 'style-guides');
@@ -251,6 +276,13 @@ function loadStyleGuide(name) {
   }
 }
 
+rules.registerScopes({
+  headlines: { label: 'Headlines & dek', guide: () => loadStyleGuide('headlines') },
+  social: { label: 'Social media copy', guide: () => loadStyleGuide('social-media') },
+  copyEdit: { label: 'Copy-edit', guide: () => loadStyleGuide('copy-edit') },
+  factCheck: { label: 'Fact-check', guide: () => loadStyleGuide('fact-check') },
+});
+
 // API: Get all style guides
 app.get('/api/style-guides', (req, res) => {
   res.json({
@@ -261,992 +293,703 @@ app.get('/api/style-guides', (req, res) => {
   });
 });
 
-// API: Fetch Google Doc or Substack
+// The style guide used for a request: the session's edited copy if the editor
+// changed it in the Style Guides panel, otherwise the file on disk.
+function guideFor(name, override) {
+  return (override && override.trim()) ? override : loadStyleGuide(name);
+}
+
+function errorMessage(e) {
+  if (e?.status === 429) return 'The AI service is busy (rate limit). Please try again in a minute.';
+  if (e?.status === 529 || e?.status === 503) return 'The AI service is temporarily overloaded. Please try again shortly.';
+  if (e?.status === 401) return 'The Anthropic API key is missing or invalid.';
+  return e?.message || 'Something went wrong.';
+}
+
+// ==================== FETCHING ARTICLES ====================
+
+async function fetchSubstack(url) {
+  const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Persuasion editorial assistant)' } });
+  if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
+  const html = await response.text();
+  const $ = cheerio.load(html);
+
+  let bodyHtml = '';
+  let title = '';
+  let subtitle = '';
+
+  $('script').each((i, el) => {
+    if (bodyHtml) return;
+    const scriptContent = $(el).html() || '';
+    if (!scriptContent.includes('window._preloads')) return;
+    const m = scriptContent.match(/window\._preloads\s*=\s*JSON\.parse\(("(?:[^"\\]|\\.)*")\)/s);
+    if (!m) return;
+    try {
+      const preloads = JSON.parse(JSON.parse(m[1]));
+      const post = preloads.post || (preloads.posts && preloads.posts[0]);
+      if (post && post.body_html) {
+        bodyHtml = post.body_html;
+        title = post.title || '';
+        subtitle = post.subtitle || '';
+      }
+    } catch (e) {
+      console.log('Substack preload parse failed:', e.message);
+    }
+  });
+
+  if (!bodyHtml) {
+    for (const selector of ['.body.markup', '.available-content', '.post-content', 'article .body', '.entry-content']) {
+      const el = $(selector).first();
+      if (el.length && el.text().trim().length > 100) { bodyHtml = el.html(); break; }
+    }
+    title = title || $('h1.post-title').text().trim() || $('h1').first().text().trim();
+    subtitle = subtitle || $('h3.subtitle').first().text().trim();
+  }
+  if (!bodyHtml) throw new Error('Could not extract article content. Make sure this is a public or shared Substack post.');
+
+  const body = htmlToLite(bodyHtml).text;
+  const head = [title ? `# ${title}` : '', subtitle].filter(Boolean).join('\n\n');
+  return { text: head ? `${head}\n\n${body}` : body, title, subtitle };
+}
+
+async function fetchGoogleDoc(url) {
+  let docId = null;
+  for (const pattern of [/\/document\/d\/([a-zA-Z0-9-_]+)/, /\/open\?id=([a-zA-Z0-9-_]+)/, /id=([a-zA-Z0-9-_]+)/]) {
+    const match = url.match(pattern);
+    if (match) { docId = match[1]; break; }
+  }
+  if (!docId) throw Object.assign(new Error('Could not parse URL. Supported: Google Docs (shared with "Anyone with the link") or Substack posts.'), { status: 400 });
+
+  const response = await fetch(`https://docs.google.com/document/d/${docId}/export?format=html`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch document: ${response.status}. Make sure the document is shared with "Anyone with the link".`);
+  }
+  const converted = htmlToLite(await response.text());
+  return {
+    text: converted.text,
+    title: converted.title || guessTitle(converted.text),
+    subtitle: converted.subtitle,
+  };
+}
+
+// API: Fetch Google Doc or Substack, keeping italics and links
 app.post('/api/fetch-doc', async (req, res) => {
   const { url } = req.body;
-
-  if (!url || !url.trim()) {
-    return res.status(400).json({ error: 'URL is required' });
-  }
-
+  if (!url || !url.trim()) return res.status(400).json({ error: 'URL is required' });
   try {
-    // Check if it's a Substack URL
-    if (url.includes('substack.com') || url.match(/https?:\/\/[^\/]+\.[^\/]+\/p\//)) {
-      // Fetch Substack article
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.status}`);
-      }
-
-      const html = await response.text();
-      const $ = cheerio.load(html);
-
-      let content = '';
-      let title = '';
-
-      // Helper to extract text while preserving italics as markdown
-      function extractTextWithItalics($el, $) {
-        // Convert <em> and <i> tags to markdown italics
-        $el.find('em, i').each((idx, elem) => {
-          const $elem = $(elem);
-          const rawText = $elem.text();
-          const trimmed = rawText.trim();
-          // Preserve leading/trailing spaces outside the asterisks
-          const leadingSpace = rawText.match(/^\s+/) ? ' ' : '';
-          const trailingSpace = rawText.match(/\s+$/) ? ' ' : '';
-          $elem.replaceWith(`${leadingSpace}*${trimmed}*${trailingSpace}`);
-        });
-        return $el.text().trim();
-      }
-
-      // First, try to extract from JSON preloads (works for drafts and some posts)
-      const allScripts = $('script');
-      allScripts.each((i, el) => {
-        if (content && content.length > 100) return; // Already found content
-
-        const scriptContent = $(el).html() || '';
-        if (scriptContent.includes('body_html') && scriptContent.includes('window._preloads')) {
-          // Extract the JSON string from: window._preloads = JSON.parse("...")
-          const jsonMatch = scriptContent.match(/window\._preloads\s*=\s*JSON\.parse\("(.+)"\)/s);
-          if (jsonMatch) {
-            try {
-              // The JSON is escaped - we need to unescape it
-              // First unescape the outer string escaping
-              let jsonStr = jsonMatch[1];
-              // Replace escaped quotes and backslashes
-              jsonStr = jsonStr.replace(/\\"/g, '"');
-              jsonStr = jsonStr.replace(/\\\\/g, '\\');
-
-              const preloads = JSON.parse(jsonStr);
-
-              // Look for post data in various locations
-              const post = preloads.post || (preloads.posts && preloads.posts[0]);
-              if (post && post.body_html) {
-                title = post.title || '';
-                // Parse HTML content, preserving italics
-                const $body = cheerio.load(post.body_html);
-                content = $body('p, h1, h2, h3, h4, blockquote, li').map((idx, elem) => {
-                  return extractTextWithItalics($body(elem).clone(), $body);
-                }).get().filter(t => t.length > 0).join('\n\n');
-              }
-            } catch (e) {
-              console.log('JSON parse failed:', e.message);
-            }
-          }
-        }
-      });
-
-      // Fall back to HTML selectors if JSON extraction failed
-      if (!content || content.length < 100) {
-        const selectors = ['.body.markup', '.post-content', '.available-content', 'article .body', '.entry-content'];
-
-        for (const selector of selectors) {
-          const element = $(selector);
-          if (element.length > 0) {
-            element.find('button, .subscription-widget, .captioned-image-container figcaption').remove();
-            content = element.find('p, h1, h2, h3, h4, blockquote, li').map((i, el) => {
-              return extractTextWithItalics($(el).clone(), $);
-            }).get().join('\n\n');
-            if (content.length > 100) break;
-          }
-        }
-
-        if (!title) {
-          title = $('h1.post-title').text().trim() || $('h1').first().text().trim() || '';
-        }
-      }
-
-      if (!content || content.length < 100) {
-        throw new Error('Could not extract article content. Make sure this is a public or shared Substack post.');
-      }
-
-      const finalContent = title ? `${title}\n\n${content}` : content;
-
-      res.json({ content: finalContent });
-    } else {
-      // Google Doc URL
-      let docId = null;
-      const patterns = [
-        /\/document\/d\/([a-zA-Z0-9-_]+)/,
-        /\/open\?id=([a-zA-Z0-9-_]+)/,
-        /id=([a-zA-Z0-9-_]+)/
-      ];
-
-      for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match) {
-          docId = match[1];
-          break;
-        }
-      }
-
-      if (!docId) {
-        return res.status(400).json({ error: 'Could not parse URL. Supported: Google Docs (shared publicly) or Substack articles.' });
-      }
-
-      const exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`;
-      const response = await fetch(exportUrl);
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch document: ${response.status}. Make sure the document is shared with "Anyone with the link".`);
-      }
-
-      const content = await response.text();
-      res.json({ content });
-    }
+    const isSubstack = url.includes('substack.com') || /https?:\/\/[^/]+\.[^/]+\/p\//.test(url) || url.includes('persuasion.community');
+    const result = isSubstack && !url.includes('docs.google.com') ? await fetchSubstack(url.trim()) : await fetchGoogleDoc(url.trim());
+    res.json({ content: result.text, title: result.title, subtitle: result.subtitle, formatting: 'rich' });
   } catch (error) {
     console.error('Fetch doc error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 
-// Prompt creation functions
-function createHeadlinePrompt(text, styleGuide) {
-  const guideSection = styleGuide?.trim()
-    ? `\n\nStyle Guide for Headlines:\n${styleGuide}\n\n---\n\n`
-    : '';
+// API: Convert pasted HTML (from Google Docs, Word, Substack...) to text with
+// *italics* and [links](url) preserved.
+app.post('/api/convert-html', (req, res) => {
+  try {
+    const { text, title } = htmlToLite(String(req.body.html || ''));
+    res.json({ text, title });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
-  return `You are an expert editor for Persuasion, a magazine focused on defending liberal democracy and promoting open debate.
-${guideSection}
-Generate 3 headline and dek (subheadline) pairs for this article, each with a different style:
+// ==================== HEADLINES & SOCIAL (options with feedback) ====================
 
-1. STRAIGHT: Clear, direct, to the point. States the main argument or topic plainly.
+const HEADLINE_SCHEMA = {
+  type: 'object',
+  properties: {
+    options: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          style: { type: 'string' },
+          headline: { type: 'string' },
+          dek: { type: 'string' },
+        },
+        required: ['style', 'headline', 'dek'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['options'],
+  additionalProperties: false,
+};
 
-2. PROVOCATIVE: Grabs attention, makes a bold claim or poses a challenge. More assertive than straight, but NOT clickbait.
+async function generateHeadlines(body, exclude = []) {
+  const { article, currentTitle, currentDek, guidance, history, pinned, feedback, variantOf, styleGuide } = body;
+  const describe = o => `${o.headline} — ${o.dek}`;
+  const want = 3;
+  const system = `You are an expert headline editor for Persuasion, a magazine defending liberal democracy and open debate.\n\n${dateContext()}\n\n<style_guide>\n${guideFor('headlines', styleGuide)}\n</style_guide>${await rules.rulesForPrompt('headlines')}`;
 
-3. CREATIVE: Playful, clever, or unexpected. Can use wordplay, cultural references, or surprising framing. Example from Persuasion's past: "All COPs Are Bastards" (about climate conferences). Be willing to take creative risks.
+  const ask = variantOf
+    ? `Write ${want} new headline + dek pairs that are variations on the option in <more_like_this>. Label each style "Variation".`
+    : `Write ${want} headline + dek pairs in three distinct styles:
+1. "Straight": clear and direct; states the argument or topic plainly.
+2. "Provocative": a bold claim or challenge; assertive but never clickbait.
+3. "Creative": playful, clever, or unexpected; can take creative risks (e.g. Persuasion's "All COPs Are Bastards" on climate conferences).`;
 
-All three should:
-- Capture the essence of the article
-- Match Persuasion's tone: intelligent, accessible, principled
+  const prompt = `<article>\n${article}\n</article>\n${currentTitle ? `\n<current_title>\n${currentTitle}${currentDek ? `\nCurrent dek: ${currentDek}` : ''}\n</current_title>\nThis is the article's working title. Do NOT suggest it, or a light rewording of it — every option must be genuinely new.\n` : ''}${editorNotes(guidance)}${roundsBlock(history, describe)}${steeringInstructions({ feedback, variantOf, pinned, describe })}${exclude.length ? `\n<already_rejected>\nThese are too close to existing titles; don't produce anything similar:\n${exclude.map(e => `- ${e}`).join('\n')}\n</already_rejected>\n` : ''}
+${ask}
 
-Format your response as JSON:
-{
-  "suggestions": [
-    { "style": "Straight", "headline": "...", "dek": "..." },
-    { "style": "Provocative", "headline": "...", "dek": "..." },
-    { "style": "Creative", "headline": "...", "dek": "..." }
-  ]
+Every option must be new: never repeat or lightly reword the current title or any option from previous rounds or the pinned list. Use title case for headlines and sentence case for deks, per the style guide.`;
+
+  const { json } = await callClaude({ task: 'headlines', ...TASKS.headlines, system, prompt, schema: HEADLINE_SCHEMA, maxTokens: 12000 });
+  return json.options || [];
 }
 
-Article:
-${text}`;
+app.post('/api/headlines', async (req, res) => {
+  const body = req.body || {};
+  if (!body.article || !body.article.trim()) return res.status(400).json({ error: 'Article text is required' });
+  try {
+    const previous = [
+      ...(body.currentTitle ? [body.currentTitle] : []),
+      ...((body.history || []).flatMap(r => (r.options || []).map(o => o.headline))),
+      ...((body.pinned || []).map(o => o.headline)),
+    ];
+    const isNew = o => o && o.headline && !previous.some(p => tooSimilar(o.headline, p));
+    let options = (await generateHeadlines(body)).filter(isNew);
+    if (options.length < 3) {
+      // One retry for any slots lost to repeats of the current title / earlier rounds.
+      const rejected = previous.slice(0, 20);
+      const extra = (await generateHeadlines(body, rejected)).filter(isNew)
+        .filter(o => !options.some(x => tooSimilar(x.headline, o.headline)));
+      options = options.concat(extra).slice(0, 3);
+    }
+    res.json({ options });
+  } catch (error) {
+    console.error('Headlines error:', error);
+    res.status(500).json({ error: errorMessage(error) });
+  }
+});
+
+const SOCIAL_SCHEMA = {
+  type: 'object',
+  properties: {
+    options: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false } },
+  },
+  required: ['options'],
+  additionalProperties: false,
+};
+
+async function generateSocial(body) {
+  const { article, platform, currentTitle, guidance, history, pinned, feedback, variantOf, styleGuide } = body;
+  const p = PLATFORMS[platform];
+  const describe = o => o.text;
+  const system = `You are the social media editor for Persuasion, a magazine defending liberal democracy and open debate.\n\n${dateContext()}\n\n<style_guide>\n${guideFor('social-media', styleGuide)}\n</style_guide>${await rules.rulesForPrompt('social')}`;
+  const ask = variantOf
+    ? `Write 3 new ${p.label} posts that are variations on the post in <more_like_this>.`
+    : `Write 3 distinct ${p.label} posts promoting this article, each taking a different angle or structure.`;
+  const prompt = `<article>\n${article}\n</article>\n${currentTitle ? `\n<article_title>${currentTitle}</article_title>\n` : ''}${editorNotes(guidance)}${roundsBlock(history, describe)}${steeringInstructions({ feedback, variantOf, pinned, describe })}
+${ask}
+
+Platform: ${p.label}. Follow the ${p.label} section of the style guide. Hard length limit: ${p.limit} characters per post. Never include a URL or link placeholder. Never repeat a previous or pinned post.`;
+  const { json } = await callClaude({ task: `social-${platform}`, ...TASKS.social, system, prompt, schema: SOCIAL_SCHEMA, maxTokens: 10000 });
+  return json.options || [];
 }
 
-function createSocialPrompt(text, platform, styleGuide) {
-  const guideSection = styleGuide?.trim()
-    ? `\n\nStyle Guide for Social Media:\n${styleGuide}\n\n---\n\n`
-    : '';
+app.post('/api/social', async (req, res) => {
+  const body = req.body || {};
+  if (!body.article || !body.article.trim()) return res.status(400).json({ error: 'Article text is required' });
+  if (!PLATFORMS[body.platform]) return res.status(400).json({ error: 'Unknown platform' });
+  const limit = PLATFORMS[body.platform].limit;
+  try {
+    let options = await generateSocial(body);
+    const tooLong = options.filter(o => o.text.length > limit);
+    if (tooLong.length) {
+      const { json } = await callClaude({
+        task: `social-${body.platform}-shorten`, tier: 'standard', effort: 'low', schema: SOCIAL_SCHEMA, maxTokens: 6000,
+        prompt: `These ${PLATFORMS[body.platform].label} posts are over the ${limit}-character limit. Rewrite each to fit comfortably under ${limit} characters, keeping its angle and voice. Return them in the same order.\n\n${tooLong.map((o, i) => `${i + 1}. (${o.text.length} chars) ${o.text}`).join('\n\n')}`,
+      });
+      const fixed = json.options || [];
+      options = options.map(o => {
+        const idx = tooLong.indexOf(o);
+        return idx >= 0 && fixed[idx] && fixed[idx].text.length < o.text.length ? fixed[idx] : o;
+      });
+    }
+    res.json({ options: options.map(o => ({ text: o.text, overLimit: o.text.length > limit })), limit });
+  } catch (error) {
+    console.error('Social error:', error);
+    res.status(500).json({ error: errorMessage(error) });
+  }
+});
 
-  const platformInstructions = {
-    substack: 'Substack Notes: Can be longer (up to 500 chars), include context, can reference the article directly. NEVER use hashtags.',
-    twitter: 'Twitter/X: Maximum 280 characters. Punchy, engaging. NEVER use hashtags - they look desperate and reduce engagement.',
-    instagram: 'Instagram: Caption style, can be slightly longer, emoji-friendly, engaging hook. Minimal hashtags only if truly necessary.'
-  };
+// ==================== COPY-EDIT ====================
 
-  return `You are a social media manager for Persuasion, a magazine focused on defending liberal democracy.
-${guideSection}
-Generate 3 social media posts for ${platform} promoting this article.
+const COPY_CATEGORIES = ['spelling', 'grammar', 'punctuation', 'house_style', 'usage', 'consistency', 'clarity', 'other'];
+const COPYEDIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          quote: { type: 'string', description: 'Exact words from the article, copied character for character' },
+          context_before: { type: 'string', description: 'Up to 6 words immediately before the quote, to locate it if the phrase repeats' },
+          replacement: { type: 'string', description: 'What the quoted words should become' },
+          explanation: { type: 'string' },
+          severity: { type: 'string', enum: ['error', 'suggestion'] },
+          category: { type: 'string', enum: COPY_CATEGORIES },
+        },
+        required: ['quote', 'context_before', 'replacement', 'explanation', 'severity', 'category'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['issues'],
+  additionalProperties: false,
+};
 
-Platform guidelines: ${platformInstructions[platform]}
-
-Format your response as JSON:
-{
-  "suggestions": ["post 1", "post 2", "post 3"]
-}
-
-Article:
-${text}`;
-}
-
-function createCopyEditPrompt(text, styleGuide, startIssueNum = 1) {
-  const guideSection = styleGuide?.trim()
-    ? `\n\nCopy-Editing Style Guide:\n${styleGuide}\n\n---\n\n`
-    : '';
-
-  return `You are an expert copy editor for Persuasion magazine.
-${guideSection}
-Review this article ONLY for prose and style issues:
-- Spelling and grammar errors
-- Punctuation issues
-- Awkward phrasing
-- Clarity problems
-- Style inconsistencies
-- Repetitive word choices
-
-DO NOT flag:
-- Factual claims or fact-checking issues (there's a separate fact-checker for that)
-- Dates or timeline issues
-- Whether statistics or claims are accurate
-- "Toward" vs "towards" (both are acceptable)
-
-For each issue you find, mark ONLY the problematic text using this exact format:
-[[ISSUE: problematic text here]]
-
-Do NOT include the fix in the marked text - just highlight what needs attention.
-
-After the complete article, add a section starting with "---ISSUES---" followed by a numbered list of all issues in this format (start numbering at ${startIssueNum}):
-${startIssueNum}. "problematic text" -> "suggested fix" (reason)
-${startIssueNum + 1}. "problematic text" -> "suggested fix" (reason)
-
-Output the COMPLETE article with issues marked, then the issues list.
-
-Article to edit:
-${text}`;
-}
-
-// Helper to split text into chunks by paragraphs
-function splitIntoChunks(text, maxChunkSize = 4000) {
-  const paragraphs = text.split(/\n\n+/);
+function chunkParagraphs(text, max) {
+  const paras = text.split(/\n\s*\n/);
   const chunks = [];
-  let currentChunk = '';
+  let cur = '';
+  for (const p of paras) {
+    if (cur && cur.length + p.length + 2 > max) { chunks.push(cur); cur = p; }
+    else cur = cur ? `${cur}\n\n${p}` : p;
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
 
-  for (const para of paragraphs) {
-    if (currentChunk.length + para.length + 2 > maxChunkSize && currentChunk.length > 0) {
-      chunks.push(currentChunk.trim());
-      currentChunk = para;
-    } else {
-      currentChunk += (currentChunk ? '\n\n' : '') + para;
+async function copyEditChunk(chunk, { formatting, guidance, styleGuide, part, parts }) {
+  const system = `You are a meticulous copy editor for Persuasion magazine.\n\n${dateContext()}\n\n<style_guide>\n${guideFor('copy-edit', styleGuide)}\n</style_guide>${await rules.rulesForPrompt('copyEdit')}`;
+  const formattingNote = formatting === 'plain'
+    ? 'Formatting was NOT captured for this text (plain paste): you cannot see italics, so never flag missing or incorrect italics.'
+    : 'Formatting WAS captured: *asterisks* mark italics, **double asterisks** bold, and [text](url) links. Text shown in *asterisks* is italicized.';
+  const prompt = `${formattingNote}${parts > 1 ? `\nThis is part ${part} of ${parts} of the article.` : ''}
+${editorNotes(guidance)}
+<article>
+${chunk}
+</article>
+
+List the copy-editing issues in this article, following the style guide. Do NOT rewrite or reproduce the article.
+
+For each issue:
+- quote: the exact words that need changing, copied character for character from the article (without the markup asterisks/brackets unless the issue is about them). Keep it short — just enough to pinpoint the problem, usually 1 to 8 words.
+- context_before: up to 6 words that come right before the quote in the article (empty string if it starts a paragraph).
+- replacement: what those exact words should become. It must differ from the quote.
+- explanation: one short sentence saying what's wrong (cite the rule where relevant, e.g. "House style: serial comma").
+- severity: "error" for objective mistakes and style-guide violations; "suggestion" for optional clarity improvements.
+- category: one of ${COPY_CATEGORIES.join(', ')}.
+
+Only include real problems you are confident about. If something is already correct, leave it out entirely — never list an item just to say it's fine. Return an empty list if the article is clean.`;
+  const { json } = await callClaude({ task: 'copy-edit', ...TASKS.copyEdit, system, prompt, schema: COPYEDIT_SCHEMA, maxTokens: 24000 });
+  return json.issues || [];
+}
+
+function publicDoc(d) { return { text: d.text, marks: d.marks }; }
+
+app.post('/api/copy-edit', async (req, res) => {
+  const { article, formatting = 'rich', guidance, styleGuide } = req.body || {};
+  if (!article || !article.trim()) return res.status(400).json({ error: 'Article text is required' });
+  try {
+    const chunks = article.length > 80000 ? chunkParagraphs(article, 40000) : [article];
+    const results = await Promise.all(chunks.map((c, i) => copyEditChunk(c, { formatting, guidance, styleGuide, part: i + 1, parts: chunks.length })));
+    const doc = parseLite(article);
+    const used = [];
+    const seen = new Set();
+    const issues = [];
+    for (const raw of results.flat()) {
+      const quote = String(raw.quote || '').trim();
+      const replacement = String(raw.replacement ?? '');
+      if (!quote) continue;
+      // Drop non-issues (replacement identical to the original) — these are the
+      // "flags something, then realizes it's fine" cases.
+      const squash = s => s.replace(/\s+/g, ' ').trim();
+      if (squash(replacement) === squash(quote)) continue;
+      if (formatting === 'plain' && /italic/i.test(`${raw.explanation} ${raw.category}`)) continue;
+      const loc = locate(doc, quote, raw.context_before, used);
+      // "Should be italicized" when the text already is italic: drop.
+      const onlyAsterisks = squash(replacement.replace(/\*/g, '')) === squash(quote.replace(/\*/g, ''));
+      if (onlyAsterisks && loc && doc.marks.some(m => m.type === 'i' && m.start <= loc.start && m.end >= loc.end)) continue;
+      const key = loc ? `${loc.start}:${loc.end}:${replacement}` : `x:${quote}:${replacement}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (loc) used.push(loc);
+      issues.push({
+        quote, replacement, explanation: raw.explanation,
+        severity: raw.severity === 'suggestion' ? 'suggestion' : 'error',
+        category: raw.category,
+        start: loc ? loc.start : null, end: loc ? loc.end : null,
+        approximate: !!loc?.approximate,
+      });
     }
+    issues.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity));
+    issues.forEach((it, i) => { it.id = i + 1; });
+    res.json({ doc: publicDoc(doc), issues });
+  } catch (error) {
+    console.error('Copy-edit error:', error);
+    res.status(500).json({ error: errorMessage(error) });
   }
+});
 
-  if (currentChunk.trim()) {
-    chunks.push(currentChunk.trim());
-  }
+// ==================== FACT-CHECK ====================
 
-  return chunks.length > 0 ? chunks : [text];
+const CLAIM_CATEGORIES = ['quote', 'statistic', 'person', 'event', 'history', 'law_policy', 'research', 'other'];
+const EXTRACT_SCHEMA = {
+  type: 'object',
+  properties: {
+    claims: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          quote: { type: 'string', description: 'Exact words from the article containing the claim' },
+          claim: { type: 'string', description: 'The claim restated so it can be checked without the article' },
+          category: { type: 'string', enum: CLAIM_CATEGORIES },
+          priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+          linked_url: { type: 'string', description: 'URL of the author\'s link supporting this claim, or empty string' },
+          legal_sensitivity: { type: 'boolean' },
+        },
+        required: ['quote', 'claim', 'category', 'priority', 'linked_url', 'legal_sensitivity'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['claims'],
+  additionalProperties: false,
+};
+
+const VERDICTS = ['correct', 'incorrect', 'imprecise', 'unsupported', 'opinion'];
+const REVIEW_SCHEMA = {
+  type: 'object',
+  properties: {
+    reviews: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          keep_flag: { type: 'boolean' },
+          verdict: { type: 'string', enum: VERDICTS },
+          explanation: { type: 'string' },
+          correction: { type: 'string' },
+        },
+        required: ['id', 'keep_flag', 'verdict', 'explanation', 'correction'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['reviews'],
+  additionalProperties: false,
+};
+const VERIFY_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    results: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          verdict: { type: 'string', enum: VERDICTS },
+          explanation: { type: 'string' },
+          correction: { type: 'string' },
+          sources: { type: 'array', items: { type: 'object', properties: { url: { type: 'string' }, title: { type: 'string' } }, required: ['url', 'title'], additionalProperties: false } },
+          legal_sensitivity: { type: 'boolean' },
+        },
+        required: ['id', 'verdict', 'explanation', 'correction', 'sources', 'legal_sensitivity'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['results'],
+  additionalProperties: false,
+};
+
+async function factSystem(styleGuide) {
+  return `You are a rigorous, fair-minded fact-checker for Persuasion magazine.\n\n${dateContext()}\n\n<guide>\n${guideFor('fact-check', styleGuide)}\n</guide>${await rules.rulesForPrompt('factCheck')}`;
 }
 
-// Process copy-edit in chunks for long articles
-async function processCopyEditChunked(text, styleGuide, sendProgress) {
-  const CHUNK_THRESHOLD = 5000; // Only chunk if longer than this
+async function extractClaims(article, { guidance, styleGuide }) {
+  const prompt = `${editorNotes(guidance)}
+<article>
+${article}
+</article>
 
-  if (text.length <= CHUNK_THRESHOLD) {
-    // Short article - process normally
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 16384,
-      messages: [{ role: 'user', content: createCopyEditPrompt(text, styleGuide, 1) }]
-    });
-    return response.content[0].text;
-  }
-
-  // Long article - split into chunks
-  const chunks = splitIntoChunks(text, 4000);
-  sendProgress('copyEdit', `Processing ${chunks.length} sections...`);
-
-  let allMarkedText = '';
-  let allIssues = [];
-  let issueCounter = 1;
-
-  // Process chunks in parallel (max 3 at a time to avoid rate limits)
-  const batchSize = 3;
-  for (let i = 0; i < chunks.length; i += batchSize) {
-    const batch = chunks.slice(i, i + batchSize);
-    const startNums = batch.map((_, idx) => issueCounter + idx * 10); // Estimate 10 issues per chunk max
-
-    sendProgress('copyEdit', `Processing sections ${i + 1}-${Math.min(i + batchSize, chunks.length)} of ${chunks.length}...`);
-
-    const batchResults = await Promise.all(
-      batch.map((chunk, idx) =>
-        anthropic.messages.create({
-          model: MODEL_SONNET,
-          max_tokens: 8192,
-          messages: [{ role: 'user', content: createCopyEditPrompt(chunk, styleGuide, startNums[idx]) }]
-        }).then(r => r.content[0].text)
-      )
-    );
-
-    // Merge results
-    for (const result of batchResults) {
-      const parts = result.split(/---ISSUES---/i);
-      const markedText = parts[0].trim();
-      const issuesText = parts[1] || '';
-
-      allMarkedText += (allMarkedText ? '\n\n' : '') + markedText;
-
-      // Extract and renumber issues
-      const issueMatches = issuesText.matchAll(/\d+\.\s*(.+?)(?=\n\d+\.|$)/gs);
-      for (const match of issueMatches) {
-        allIssues.push(`${issueCounter}. ${match[1].trim()}`);
-        issueCounter++;
-      }
-    }
-  }
-
-  // Combine marked text with renumbered issues list
-  return allMarkedText + '\n\n---ISSUES---\n' + allIssues.join('\n');
-}
-
-// Process flag claims in chunks for long articles
-async function processFlagClaimsChunked(text, sendProgress) {
-  const CHUNK_THRESHOLD = 5000;
-
-  if (text.length <= CHUNK_THRESHOLD) {
-    // Short article - process normally
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 16384,
-      messages: [{ role: 'user', content: createFlagClaimsPrompt(text) }]
-    });
-    return response.content[0].text;
-  }
-
-  // Long article - split into chunks and process in parallel
-  const chunks = splitIntoChunks(text, 4000);
-  sendProgress('flagClaims', `Processing ${chunks.length} sections in parallel...`);
-
-  const batchResults = await Promise.all(
-    chunks.map((chunk, idx) =>
-      anthropic.messages.create({
-        model: MODEL_SONNET,
-        max_tokens: 8192,
-        messages: [{ role: 'user', content: createFlagClaimsPrompt(chunk) }]
-      }).then(r => r.content[0].text)
-    )
-  );
-
-  // Merge results
-  let allMarkedText = '';
-  let allClaims = [];
-  let claimCounter = 1;
-
-  for (const result of batchResults) {
-    const parts = result.split(/---CLAIMS---/i);
-    const markedText = parts[0].trim();
-    const claimsText = parts[1] || '';
-
-    allMarkedText += (allMarkedText ? '\n\n' : '') + markedText;
-
-    // Extract and renumber claims
-    const claimMatches = claimsText.matchAll(/\d+\.\s*(.+?)(?=\n\d+\.|$)/gs);
-    for (const match of claimMatches) {
-      allClaims.push(`${claimCounter}. ${match[1].trim()}`);
-      claimCounter++;
-    }
-  }
-
-  return allMarkedText + '\n\n---CLAIMS---\n' + allClaims.join('\n');
-}
-
-function createFlagClaimsPrompt(text) {
-  return `You are identifying claims that need fact-checking in an article for Persuasion magazine.
-
-Your job is to IDENTIFY claims that should be verified before publication - NOT to verify them yourself. Be AGGRESSIVE - it's better to flag too much than too little.
-
-Mark each claim that needs verification using:
-[[CLAIM: the claim text | category | why it needs verification]]
-
-Categories:
-- STATISTIC: Numbers, percentages, data points
-- QUOTE: Direct quotes or attributed statements
-- HISTORICAL: Historical events, dates, facts
-- SCIENTIFIC: Scientific claims, studies, research findings
-- BIOGRAPHICAL: Facts about specific people
-- CURRENT: Current events, recent developments, ongoing situations
-- LEGAL: Claims about laws, court decisions, legal processes
-- POLICY: Claims about what policies do or have done
-- SENSITIVE: Potentially defamatory claims, personal allegations, claims that could lead to lawsuits - FLAG THESE LIBERALLY
-
-FLAG AGGRESSIVELY - include:
-- Strong allegations about individuals or institutions
-- Claims about someone's motives or intentions
-- Accusations of wrongdoing, corruption, or illegal activity
-- Claims about due process violations or civil rights abuses
-- Assertions about what agencies or officials have done
-- Claims about impacts or consequences of policies
-- Characterizations of someone's behavior (e.g., "turned X into an instrument of revenge")
-- Claims that could be seen as defamatory if inaccurate
-- Any claim a lawyer might flag before publication
-
-Do NOT flag:
-- Pure opinion clearly framed as opinion ("I believe...", "In my view...")
-- Obvious hyperbole or rhetorical flourishes
-- Questions posed by the author
-
-IMPORTANT: When in doubt, FLAG IT. The goal is to catch everything that could cause problems if wrong.
-
-Output the COMPLETE article with claims marked.
-After the article, add "---CLAIMS---" followed by a numbered list:
-1. "claim text" (CATEGORY) - What to verify
-2. "claim text" (CATEGORY) - What to verify
-
-Article to review:
-${text}`;
-}
-
-function createFactCheckPrompt(text, styleGuide) {
-  const guideSection = styleGuide?.trim()
-    ? `\n\nFact-Checking Guidelines:\n${styleGuide}\n\n---\n\n`
-    : '';
-
-  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-
-  return `You are a fact-checker for Persuasion magazine.
-Today's date is ${today} (or possibly later when you process this - the article is CURRENT).
-${guideSection}
-Review this article and verify factual claims. Be COMPREHENSIVE - mark ALL significant claims.
+Identify the checkable factual claims in this article, following the guide. Skip opinions, arguments, predictions, and rhetoric. If there are more than 40, keep the 40 that matter most (quotes, numbers, claims about named people, and anything legally sensitive come first).
 
 For each claim:
-
-1. If VERIFIED (you're confident it's accurate based on established facts):
-   [[VERIFIED: the claim text]]
-
-2. If QUESTIONABLE (uncertain, needs source, or partially accurate):
-   [[QUESTIONABLE: the claim text | your concern or what needs verification]]
-
-3. If INCORRECT (demonstrably wrong based on established facts):
-   [[INCORRECT: the claim text | the correction with accurate information]]
-
-4. If TIME-SENSITIVE (requires current data you don't have):
-   [[CHECK_CURRENT: the claim text | what specifically needs to be verified with current sources]]
-
-Be AGGRESSIVE - mark claims about:
-- Statistics, numbers, and percentages
-- Historical facts and dates
-- Quotes and attributions
-- Scientific and research claims
-- Named events, policies, or legislation
-- What officials or agencies have done
-- Allegations of wrongdoing or illegal activity
-- Policy impacts and consequences
-- Any claim that could be defamatory if wrong
-
-CRITICAL DATE GUIDANCE:
-- Today is ${today}. The article is CURRENT - written recently.
-- Do NOT flag claims as incorrect or questionable just because they mention recent events.
-- Do NOT question whether recent events happened - assume the author has current knowledge.
-- Do NOT flag timeline issues for events in 2025 or late 2024.
-- Only use CHECK_CURRENT for claims where you genuinely cannot verify the current state.
-
-Output the COMPLETE article with claims marked.
-After the article, do not add any additional commentary.
-
-Article to fact-check:
-${text}`;
+- quote: the exact words from the article that contain the claim (copied character for character, without markup; a clause or sentence, at most about 40 words)
+- claim: the claim restated as a standalone sentence, adding any context needed to check it (who, what, when)
+- category, priority (how much it matters if wrong)
+- linked_url: if the author linked a source for this claim in the same sentence, that URL exactly as written in the article; otherwise ""
+- legal_sensitivity: true if it alleges wrongdoing or misconduct by an identifiable person or organization, or concerns a private individual`;
+  const { json } = await callClaude({ task: 'fact-extract', ...TASKS.factExtract, system: await factSystem(styleGuide), prompt, schema: EXTRACT_SCHEMA, maxTokens: 16000 });
+  return (json.claims || []).slice(0, 40);
 }
 
-// Tavily web search helper
-async function searchWithTavily(query) {
-  const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-  if (!TAVILY_API_KEY) {
-    return null;
-  }
+async function verifyBatch(article, batch, { styleGuide, deep, articleLinks }) {
+  const n = batch.length;
+  const prompt = `<article>
+${article}
+</article>
 
-  try {
-    const response = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        api_key: TAVILY_API_KEY,
-        query: query,
-        search_depth: 'basic', // Use basic for cost efficiency
-        max_results: 3
-      })
-    });
+<claims_to_check>
+${batch.map(c => `[${c.id}] ${c.claim}\n    Article wording: "${c.quote}"${c.linked_url ? `\n    Author's linked source: ${c.linked_url}` : ''}`).join('\n\n')}
+</claims_to_check>
 
-    if (!response.ok) {
-      console.error('Tavily search failed:', response.status);
-      return null;
-    }
+Check each claim above, following the guide. For a claim with an author's linked source, fetch that page first and see whether it supports the claim. Then search the web as needed — use searches efficiently, and prefer primary and established sources.
 
-    const data = await response.json();
-    return data.results || [];
-  } catch (e) {
-    console.error('Tavily search error:', e.message);
-    return null;
-  }
-}
+When you have finished checking, reply with ONLY a JSON object in a \`\`\`json code block, in this shape:
+{"results": [{"id": <claim number>, "verdict": "correct|incorrect|imprecise|unsupported|opinion", "explanation": "<1-3 sentences: your conclusion and the evidence>", "correction": "<the accurate version, or empty string>", "sources": [{"url": "<a page you actually read or found in search>", "title": "<page title>"}], "legal_sensitivity": <true|false>}]}
 
-// Extract claims for fact-checking - chunked for long articles
-async function extractClaimsForFactCheck(text, today, sendProgress) {
-  const CHUNK_THRESHOLD = 5000;
+Include every claim number exactly once. The explanation must state only your final conclusion — no back-and-forth, and never a flag that you then retract.`;
 
-  const extractPrompt = (articleText) => `Today's date is ${today} (or possibly later when you process this).
-
-Extract ALL factual claims from this article that should be verified. Be AGGRESSIVE - it's better to extract too many than too few.
-
-For each claim, provide:
-1. The exact claim text (short - just the core claim)
-2. A search query to verify it (be specific)
-
-Format as JSON:
-{
-  "claims": [
-    { "claim": "exact claim from article", "searchQuery": "specific search query" }
-  ]
-}
-
-FLAG AGGRESSIVELY - include:
-- Statistics, numbers, percentages
-- Quotes and attributed statements
-- Named policies, legislation, or executive actions
-- Claims about what officials or agencies have done
-- Allegations of wrongdoing, corruption, or illegal activity
-- Claims about someone's motives or intentions
-- Claims about due process violations or civil rights abuses
-- Policy impacts and consequences
-- Characterizations of someone's behavior (e.g., "turned X into an instrument of revenge")
-- Claims that could be seen as defamatory if inaccurate
-- Any claim a lawyer might flag before publication
-- Claims about institutional actions
-- Historical facts and dates
-- Scientific or research claims
-
-DO NOT extract:
-- Pure opinions clearly framed as opinion ("I believe...", "In my view...")
-- Obvious hyperbole or rhetorical flourishes
-- Questions posed by the author
-
-IMPORTANT: When in doubt, EXTRACT IT. Extract as many claims as the article warrants - could be 20, could be 60+.
-
-Article:
-${articleText}`;
-
-  if (text.length <= CHUNK_THRESHOLD) {
-    // Short article - single extraction
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: extractPrompt(text) }]
-    });
-
-    const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
-    const data = JSON.parse(jsonMatch[0]);
-    return data.claims || [];
-  }
-
-  // Long article - chunk and extract in parallel
-  const chunks = splitIntoChunks(text, 4000);
-  sendProgress('factCheck', `Identifying claims across ${chunks.length} sections...`);
-
-  const chunkResults = await Promise.all(
-    chunks.map(async (chunk) => {
-      const response = await anthropic.messages.create({
-        model: MODEL_SONNET,
-        max_tokens: 2048,
-        messages: [{ role: 'user', content: extractPrompt(chunk) }]
-      });
-
-      try {
-        const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
-        const data = JSON.parse(jsonMatch[0]);
-        return data.claims || [];
-      } catch (e) {
-        return [];
-      }
-    })
-  );
-
-  // Merge and deduplicate claims more robustly
-  const allClaims = chunkResults.flat();
-  const uniqueClaims = [];
-  const seenClaims = [];
-
-  for (const claim of allClaims) {
-    // Normalize: lowercase, remove extra spaces, take key words
-    const normalized = claim.claim.toLowerCase()
-      .replace(/[^\w\s]/g, '') // remove punctuation
-      .replace(/\s+/g, ' ')    // normalize spaces
-      .trim();
-
-    // Check if we've seen a similar claim (>60% overlap in words)
-    const words = normalized.split(' ').filter(w => w.length > 3);
-    const isDuplicate = seenClaims.some(seen => {
-      const seenWords = seen.split(' ').filter(w => w.length > 3);
-      const overlap = words.filter(w => seenWords.includes(w)).length;
-      const similarity = overlap / Math.max(words.length, seenWords.length);
-      return similarity > 0.6;
-    });
-
-    if (!isDuplicate) {
-      seenClaims.push(normalized);
-      uniqueClaims.push(claim);
-    }
-  }
-
-  return uniqueClaims;
-}
-
-// Process fact-checking with web search
-async function processFactCheckWithWeb(text, styleGuide, sendProgress, sendConfirmRequired, confirmedClaimCount = false) {
-  const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
-  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-
-  // If no Tavily key, fall back to regular fact-check
-  if (!TAVILY_API_KEY) {
-    sendProgress('factCheck', 'No web search API configured - using AI knowledge only...');
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 16384,
-      messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
-    });
-    return response.content[0].text;
-  }
-
-  // Step 1: Extract claims to verify (using chunked extraction for long articles)
-  sendProgress('factCheck', 'Identifying claims to verify...');
-
-  let claims = [];
-  try {
-    claims = await extractClaimsForFactCheck(text, today, sendProgress);
-  } catch (e) {
-    console.error('Failed to extract claims:', e.message);
-    // Fall back to regular fact-check
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 16384,
-      messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
-    });
-    return response.content[0].text;
-  }
-
-  if (claims.length === 0) {
-    // No claims found, fall back to regular fact-check
-    const response = await anthropic.messages.create({
-      model: MODEL_SONNET,
-      max_tokens: 16384,
-      messages: [{ role: 'user', content: createFactCheckPrompt(text, styleGuide) }]
-    });
-    return response.content[0].text;
-  }
-
-  // Step 2: Check claim count and request confirmation if needed
-  const claimCount = claims.length;
-
-  if (claimCount > 25 && !confirmedClaimCount) {
-    // Request user confirmation before proceeding
-    sendConfirmRequired(claimCount);
-    return null; // Signal that confirmation is needed
-  }
-
-  sendProgress('factCheck', `Searching web for ${claimCount} claims...`);
-
-  // Batch Tavily searches - run 10 at a time for speed
-  const searchResults = [];
-  const SEARCH_BATCH_SIZE = 10;
-
-  for (let i = 0; i < claims.length; i += SEARCH_BATCH_SIZE) {
-    const batch = claims.slice(i, i + SEARCH_BATCH_SIZE);
-
-    sendProgress('factCheck', `Searching claims ${i + 1}-${Math.min(i + SEARCH_BATCH_SIZE, claimCount)} of ${claimCount}...`);
-
-    const batchResults = await Promise.all(
-      batch.map(async (claim) => {
-        const results = await searchWithTavily(claim.searchQuery);
-        return {
-          claim: claim.claim,
-          query: claim.searchQuery,
-          results: results || []
-        };
-      })
-    );
-
-    searchResults.push(...batchResults);
-  }
-
-  // Step 3: Have Claude verify with search results
-  // For large articles, chunk and analyze in parallel
-  const ANALYSIS_CHUNK_THRESHOLD = 4000;
-
-  if (text.length > ANALYSIS_CHUNK_THRESHOLD && searchResults.length > 10) {
-    sendProgress('factCheck', `Analyzing ${searchResults.length} claims in parallel...`);
-
-    // Split article into chunks
-    const chunks = splitIntoChunks(text, 3000);
-    const chunkCount = chunks.length;
-
-    // For each chunk, find relevant search results + include some extras
-    const chunkResults = await Promise.all(
-      chunks.map(async (chunk, idx) => {
-        // Find claims that appear in this chunk
-        const chunkLower = chunk.toLowerCase();
-        const relevantResults = searchResults.filter(sr => {
-          const claimWords = sr.claim.toLowerCase().split(' ').filter(w => w.length > 4);
-          // Check if at least 2 significant words from the claim appear in the chunk
-          const matchCount = claimWords.filter(w => chunkLower.includes(w)).length;
-          return matchCount >= 2 || chunkLower.includes(sr.claim.toLowerCase().substring(0, 30));
-        });
-
-        // Use relevant results, or if too few, use all (but cap at 40 to avoid huge prompts)
-        let resultsToUse = relevantResults.length >= 3 ? relevantResults : searchResults;
-        if (resultsToUse.length > 40) {
-          resultsToUse = resultsToUse.slice(0, 40);
-        }
-
-        try {
-          const chunkPrompt = createVerifyPrompt(chunk, resultsToUse, today, idx + 1, chunkCount);
-
-          const response = await anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 8192,
-            messages: [{ role: 'user', content: chunkPrompt }]
-          });
-
-          return response.content[0].text;
-        } catch (e) {
-          console.error(`Error analyzing chunk ${idx + 1}:`, e.message);
-          return chunk; // Return unmarked chunk on error
-        }
-      })
-    );
-
-    // Merge chunk results
-    return chunkResults.join('\n\n');
-  }
-
-  // For smaller articles, analyze in one go
-  sendProgress('factCheck', 'Analyzing search results...');
-  const verifyPrompt = createVerifyPrompt(text, searchResults, today);
-
-  const verifyResponse = await anthropic.messages.create({
-    model: MODEL_SONNET,
-    max_tokens: 16384,
-    messages: [{ role: 'user', content: verifyPrompt }]
+  const task = deep ? TASKS.factVerifyDeep : TASKS.factVerify;
+  const result = await callClaude({
+    task: deep ? 'fact-verify-deep' : 'fact-verify', ...task,
+    system: await factSystem(styleGuide), prompt,
+    tools: webTools({ searches: 3 * n + 2, fetches: 2 * n + 2 }), maxTokens: 32000,
   });
 
-  return verifyResponse.content[0].text;
-}
-
-// Helper to create verification prompt
-function createVerifyPrompt(text, searchResults, today, chunkNum = null, totalChunks = null) {
-  const chunkNote = chunkNum ? `\n\nThis is section ${chunkNum} of ${totalChunks} of the article.` : '';
-
-  return `You are a fact-checker for Persuasion magazine. Today's date is ${today} (or possibly later).
-
-I've ALREADY searched the web for claims in this article. You MUST use these search results to verify claims - do not say "needs verification" if I've provided search results!
-
-SEARCH RESULTS FROM WEB:
-${searchResults.map((sr, i) => `
-CLAIM ${i + 1}: "${sr.claim}"
-Search query: ${sr.query}
-Results:
-${sr.results.length > 0
-    ? sr.results.map(r => `- ${r.title}: ${r.content?.substring(0, 300) || 'No content'}... [SOURCE: ${r.url}]`).join('\n')
-    : 'No results found'}
-`).join('\n')}
-
-Now review the article and mark claims using the search results above.
-
-CRITICAL INSTRUCTIONS:
-- If search results SUPPORT a claim → mark as VERIFIED with the source
-- If search results CONTRADICT a claim → mark as INCORRECT with correction and source
-- If search results are MIXED or UNCLEAR → mark as QUESTIONABLE with explanation and source
-- ONLY use CHECK_CURRENT if NO search results were found for that specific claim
-
-Format:
-1. [[VERIFIED: claim | what confirms it | source URL]] - USE THIS when search results support the claim
-2. [[QUESTIONABLE: claim | concern | source URL]] - USE THIS when results are mixed/unclear
-3. [[INCORRECT: claim | correction | source URL]] - USE THIS when results contradict
-4. [[CHECK_CURRENT: claim | note]] - ONLY use if we have NO search results for this claim
-
-IMPORTANT: I searched the web for these claims. If there are search results above, USE THEM to verify. Do not mark something as CHECK_CURRENT if I provided search results for it - instead mark it VERIFIED, QUESTIONABLE, or INCORRECT based on what the results say.
-
-For claims not in the search results above, you can still mark them based on established facts you know.
-${chunkNote}
-Output the article text with claims marked.
-
-Article:
-${text}`;
-}
-
-// SSE endpoint for processing
-app.post('/api/process-stream', async (req, res) => {
-  const { text, tasks, styleGuides = {}, factCheckConfirmed = false } = req.body;
-
-  if (!text || text.trim() === '') {
-    return res.status(400).json({ error: 'Article text is required' });
+  let parsed = extractJson(result.text);
+  if (!parsed || !Array.isArray(parsed.results)) {
+    const repair = await callClaude({
+      task: 'fact-repair-json', ...TASKS.repairJson, schema: VERIFY_JSON_SCHEMA, maxTokens: 8000,
+      prompt: `Convert this fact-check write-up into the JSON shape required. Do not change any conclusions.\n\nClaim numbers: ${batch.map(c => c.id).join(', ')}\n\n${result.text}`,
+    });
+    parsed = repair.json;
   }
 
-  if (!tasks || Object.values(tasks).every(v => !v)) {
-    return res.status(400).json({ error: 'Select at least one task' });
-  }
+  const retrieved = retrievedSources(result.blocks);
+  for (const l of articleLinks) retrieved.set(normalizeUrl(l.href), { url: l.href, title: l.text });
 
-  // Set up SSE
+  const byId = new Map((parsed.results || []).map(r => [Number(r.id), r]));
+  return batch.map(c => {
+    const r = byId.get(c.id);
+    if (!r) return { id: c.id, verdict: 'unsupported', explanation: 'The checker did not return a result for this claim.', correction: '', sources: [], legal_sensitivity: c.legal_sensitivity, error: true };
+    const sources = [];
+    for (const s of r.sources || []) {
+      const hit = retrieved.get(normalizeUrl(s.url));
+      if (hit && !sources.some(x => normalizeUrl(x.url) === normalizeUrl(hit.url))) sources.push({ url: hit.url, title: s.title || hit.title });
+    }
+    return {
+      id: c.id,
+      verdict: VERDICTS.includes(String(r.verdict).toLowerCase()) ? String(r.verdict).toLowerCase() : 'unsupported',
+      explanation: r.explanation || '',
+      correction: r.correction || '',
+      sources,
+      legal_sensitivity: !!(r.legal_sensitivity || c.legal_sensitivity),
+    };
+  });
+}
+
+async function reviewFlags(results, claims, { styleGuide }) {
+  const flagged = results.filter(r => ['incorrect', 'imprecise', 'unsupported'].includes(r.verdict) && !r.error);
+  if (!flagged.length) return results;
+  const claimById = new Map(claims.map(c => [c.id, c]));
+  const prompt = `You are the senior editor doing a final pass over fact-check flags before they go to the author. Each flag below was produced by a checker with web access.
+
+${flagged.map(r => {
+    const c = claimById.get(r.id);
+    return `[${r.id}] Claim: ${c.claim}\nArticle wording: "${c.quote}"\nVerdict: ${r.verdict}\nExplanation: ${r.explanation}${r.correction ? `\nCorrection: ${r.correction}` : ''}\nSources: ${r.sources.map(s => s.url).join(', ') || 'none'}`;
+  }).join('\n\n')}
+
+For each flag, decide whether it should go to the author.
+Set keep_flag to false if: the explanation itself indicates the claim is accurate or substantially accurate; the problem is an immaterial quibble; the "claim" is really opinion, interpretation, or hyperbole; or the only basis for doubt is not recognizing a recent event.
+For flags you keep, you may adjust the verdict, and rewrite the explanation so it states only the conclusion and the evidence in 1-3 sentences, without hedging or narrating the checking process. For flags you drop, set verdict to "correct" (or "opinion" if it isn't a factual claim) and give a one-sentence explanation.
+Return a review for every flag id.`;
+  try {
+    const { json } = await callClaude({ task: 'fact-review', ...TASKS.factReview, system: await factSystem(styleGuide), prompt, schema: REVIEW_SCHEMA, maxTokens: 12000 });
+    const reviews = new Map((json.reviews || []).map(r => [Number(r.id), r]));
+    return results.map(r => {
+      const rev = reviews.get(r.id);
+      if (!rev || !flagged.includes(r)) return r;
+      return {
+        ...r,
+        verdict: rev.keep_flag ? (VERDICTS.includes(String(rev.verdict).toLowerCase()) ? String(rev.verdict).toLowerCase() : r.verdict) : (String(rev.verdict).toLowerCase() === 'opinion' ? 'opinion' : 'correct'),
+        explanation: rev.explanation || r.explanation,
+        correction: rev.keep_flag ? (rev.correction || r.correction) : '',
+        reviewed: true,
+      };
+    });
+  } catch (e) {
+    console.error('Fact review pass failed (keeping unreviewed flags):', e.message);
+    return results;
+  }
+}
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+app.post('/api/fact-check', async (req, res) => {
+  const { article, guidance, styleGuide, deep = false } = req.body || {};
+  if (!article || !article.trim()) return res.status(400).json({ error: 'Article text is required' });
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-
-  const sendProgress = (task, message) => {
-    res.write(`data: ${JSON.stringify({ type: 'progress', task, message })}\n\n`);
-  };
-
-  const sendResult = (task, data) => {
-    res.write(`data: ${JSON.stringify({ type: 'result', task, data })}\n\n`);
-  };
-
-  const sendError = (task, error) => {
-    res.write(`data: ${JSON.stringify({ type: 'error', task, error })}\n\n`);
-  };
-
-  const sendDone = () => {
-    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-    res.end();
-  };
-
-  const sendConfirmRequired = (claimCount) => {
-    res.write(`data: ${JSON.stringify({ type: 'confirm_required', task: 'factCheck', claimCount })}\n\n`);
-  };
+  res.flushHeaders?.();
+  const send = (type, data = {}) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  const heartbeat = setInterval(() => res.write(': keep-alive\n\n'), 15000);
+  let closed = false;
+  res.on('close', () => { if (!res.writableEnded) closed = true; clearInterval(heartbeat); });
 
   try {
-    const promises = [];
+    const doc = parseLite(article);
+    const articleLinks = linksIn(doc);
+    send('progress', { message: 'Identifying claims to check...' });
+    const rawClaims = await extractClaims(article, { guidance, styleGuide });
+    const used = [];
+    const claims = rawClaims.map((c, i) => {
+      const loc = locate(doc, c.quote, '', used);
+      if (loc) used.push(loc);
+      return { ...c, id: i + 1, start: loc ? loc.start : null, end: loc ? loc.end : null };
+    });
+    send('claims', { doc: publicDoc(doc), claims });
+    if (!claims.length) { send('final', { results: [] }); send('done'); return; }
 
-    // Headlines
-    if (tasks.headlines) {
-      sendProgress('headlines', 'Generating headline suggestions...');
-      promises.push(
-        anthropic.messages.create({
-          model: MODEL_OPUS,
-          max_tokens: 2048,
-          messages: [{ role: 'user', content: createHeadlinePrompt(text, styleGuides.headlines) }]
-        }).then(response => {
-          try {
-            const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
-            const data = JSON.parse(jsonMatch[0]);
-            sendResult('headlines', data.suggestions);
-          } catch (e) {
-            sendError('headlines', 'Failed to parse headline response');
-          }
-        }).catch(e => sendError('headlines', e.message))
-      );
-    }
-
-    // Social Media
-    if (tasks.social) {
-      const platforms = ['substack', 'twitter', 'instagram'];
-      for (const platform of platforms) {
-        sendProgress('social', `Generating ${platform} posts...`);
-        promises.push(
-          anthropic.messages.create({
-            model: MODEL_SONNET,
-            max_tokens: 2048,
-            messages: [{ role: 'user', content: createSocialPrompt(text, platform, styleGuides.socialMedia) }]
-          }).then(response => {
-            try {
-              const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
-              const data = JSON.parse(jsonMatch[0]);
-              sendResult('social', { platform, suggestions: data.suggestions });
-            } catch (e) {
-              sendError('social', `Failed to parse ${platform} response`);
-            }
-          }).catch(e => sendError('social', e.message))
-        );
+    const batches = [];
+    for (let i = 0; i < claims.length; i += 4) batches.push(claims.slice(i, i + 4));
+    let done = 0;
+    send('progress', { message: `Checking ${claims.length} claims against the web${deep ? ' (deep check)' : ''}...` });
+    const batchResults = await mapLimit(batches, 4, async (batch) => {
+      if (closed) return [];
+      let results;
+      try {
+        results = await verifyBatch(article, batch, { styleGuide, deep, articleLinks });
+      } catch (e) {
+        console.error('Verify batch failed:', e);
+        results = batch.map(c => ({ id: c.id, verdict: 'unsupported', explanation: `Could not be checked: ${errorMessage(e)}`, correction: '', sources: [], legal_sensitivity: c.legal_sensitivity, error: true }));
       }
-    }
-
-    // Copy-Edit (with chunking for long articles)
-    if (tasks.copyEdit) {
-      sendProgress('copyEdit', 'Analyzing article for copy-editing...');
-      promises.push(
-        processCopyEditChunked(text, styleGuides.copyEdit, sendProgress)
-          .then(result => {
-            sendResult('copyEdit', { text: result });
-          })
-          .catch(e => sendError('copyEdit', e.message))
-      );
-    }
-
-    // Flag Claims (identify without verifying) - with chunking for long articles
-    if (tasks.flagClaims) {
-      sendProgress('flagClaims', 'Identifying claims to verify...');
-      promises.push(
-        processFlagClaimsChunked(text, sendProgress)
-          .then(result => {
-            sendResult('flagClaims', { text: result });
-          })
-          .catch(e => sendError('flagClaims', e.message))
-      );
-    }
-
-    // Fact-Check (with web search)
-    if (tasks.factCheck) {
-      sendProgress('factCheck', 'Fact-checking article claims with web search...');
-      promises.push(
-        processFactCheckWithWeb(text, styleGuides.factCheck, sendProgress, sendConfirmRequired, factCheckConfirmed)
-          .then(result => {
-            if (result === null) {
-              // Confirmation was requested - don't send result yet
-              return;
-            }
-            if (!result || result.length === 0) {
-              sendError('factCheck', 'No results returned from analysis');
-              return;
-            }
-            console.log(`Fact-check complete: ${result.length} chars`);
-            sendResult('factCheck', { text: result });
-          })
-          .catch(e => {
-            console.error('Fact-check error:', e);
-            sendError('factCheck', e.message || 'Unknown error during fact-check');
-          })
-      );
-    }
-
-    await Promise.all(promises);
-    sendDone();
-  } catch (error) {
-    console.error('Processing error:', error);
-    sendError('general', error.message);
-    sendDone();
-  }
-});
-
-// Regenerate headlines endpoint
-app.post('/api/regenerate-headlines', async (req, res) => {
-  const { text, styleGuide } = req.body;
-
-  if (!text || text.trim() === '') {
-    return res.status(400).json({ error: 'Article text is required' });
-  }
-
-  try {
-    const response = await anthropic.messages.create({
-      model: MODEL_OPUS,
-      max_tokens: 2048,
-      messages: [{ role: 'user', content: createHeadlinePrompt(text, styleGuide) }]
+      done += batch.length;
+      send('verdicts', { results });
+      send('progress', { message: `Checked ${done} of ${claims.length} claims...` });
+      return results;
     });
 
-    const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
-    const data = JSON.parse(jsonMatch[0]);
-    res.json({ suggestions: data.suggestions });
+    send('progress', { message: 'Final review of flagged claims...' });
+    const reviewed = await reviewFlags(batchResults.flat(), claims, { styleGuide });
+    send('final', { results: reviewed });
+    send('done');
   } catch (error) {
-    console.error('Regenerate error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Fact-check error:', error);
+    send('error', { error: errorMessage(error) });
+    send('done');
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
   }
 });
 
-// Regenerate social media endpoint
-app.post('/api/regenerate-social', async (req, res) => {
-  const { text, styleGuide } = req.body;
+// ==================== HOUSE RULES ====================
 
-  if (!text || text.trim() === '') {
-    return res.status(400).json({ error: 'Article text is required' });
-  }
-
+app.get('/api/rules', async (req, res) => {
   try {
-    const platforms = ['substack', 'twitter', 'instagram'];
-    const results = { substack: [], twitter: [], instagram: [] };
-
-    await Promise.all(
-      platforms.map(async (platform) => {
-        const response = await anthropic.messages.create({
-          model: MODEL_SONNET,
-          max_tokens: 2048,
-          messages: [{ role: 'user', content: createSocialPrompt(text, platform, styleGuide) }]
-        });
-        const jsonMatch = response.content[0].text.match(/\{[\s\S]*\}/);
-        const data = JSON.parse(jsonMatch[0]);
-        results[platform] = data.suggestions;
-      })
-    );
-
-    res.json({ suggestions: results });
-  } catch (error) {
-    console.error('Regenerate social error:', error);
-    res.status(500).json({ error: error.message });
+    const all = await rules.listRules();
+    res.json({ scopes: rules.scopeList(), rules: all.map(r => ({ id: r.id, scope: r.scope, rule: r.rule, status: r.status, submitted_by: r.submitted_by, created_at: r.created_at, review_note: r.status === 'pending' ? r.review_note : undefined })) });
+  } catch (e) {
+    res.status(500).json({ error: errorMessage(e) });
   }
+});
+
+app.post('/api/rules', async (req, res) => {
+  try {
+    const { scope, text, submittedBy, context } = req.body || {};
+    if (!submittedBy || !submittedBy.trim()) return res.status(400).json({ error: 'Please add your name.' });
+    res.json(await rules.submitRule({ scope, text, submittedBy: submittedBy.trim(), context }));
+  } catch (e) {
+    console.error('Rule submit error:', e);
+    res.status(400).json({ error: errorMessage(e) });
+  }
+});
+
+app.get('/api/meta', async (req, res) => {
+  const tiers = tierInfo();
+  res.json({
+    models: Object.fromEntries(Object.entries(tiers).map(([k, v]) => [k, v.model])),
+    pendingRules: await rules.pendingCount().catch(() => 0),
+    platforms: PLATFORMS,
+  });
+});
+
+// ==================== ADMIN ====================
+
+function requireAdmin(req, res, next) {
+  if (req.session.isAdmin) return next();
+  res.status(401).json({ error: 'Admin login required' });
+}
+
+app.post('/api/admin/login', (req, res) => {
+  if (!process.env.ADMIN_PASSWORD) return res.status(400).json({ error: 'Admin access is not set up. Add an ADMIN_PASSWORD environment variable on Render.' });
+  if (req.body?.password === process.env.ADMIN_PASSWORD) {
+    req.session.isAdmin = true;
+    return res.json({ success: true });
+  }
+  res.status(401).json({ error: 'Incorrect admin password' });
+});
+
+app.post('/api/admin/logout', (req, res) => { req.session.isAdmin = false; res.json({ success: true }); });
+
+app.get('/api/admin/state', requireAdmin, async (req, res) => {
+  try {
+    res.json({
+      rules: await rules.listRules({ includeRejected: true }),
+      scopes: rules.scopeList(),
+      models: await modelcheck.status(),
+      usage: await storage.usageSummary(30),
+      notificationsConfigured: notificationsConfigured(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: errorMessage(e) });
+  }
+});
+
+app.post('/api/admin/rules/:id/decide', requireAdmin, async (req, res) => {
+  try {
+    await rules.decideRule(Number(req.params.id), { approve: !!req.body.approve, editedRule: req.body.rule, by: 'admin' });
+    res.json({ success: true });
+  } catch (e) { res.status(400).json({ error: errorMessage(e) }); }
+});
+
+app.put('/api/admin/rules/:id', requireAdmin, async (req, res) => {
+  try {
+    if (!req.body.rule || !req.body.rule.trim()) return res.status(400).json({ error: 'Rule text is empty' });
+    await rules.updateRule(Number(req.params.id), req.body.rule.trim());
+    res.json({ success: true });
+  } catch (e) { res.status(400).json({ error: errorMessage(e) }); }
+});
+
+app.delete('/api/admin/rules/:id', requireAdmin, async (req, res) => {
+  try { await rules.deleteRule(Number(req.params.id)); res.json({ success: true }); }
+  catch (e) { res.status(400).json({ error: errorMessage(e) }); }
+});
+
+app.post('/api/admin/models/check', requireAdmin, async (req, res) => {
+  try { await modelcheck.checkForUpgrades(); res.json(await modelcheck.status()); }
+  catch (e) { res.status(500).json({ error: errorMessage(e) }); }
+});
+
+app.post('/api/admin/models/approve', requireAdmin, async (req, res) => {
+  try { await modelcheck.approveUpgrade(req.body.tier, req.body.model); res.json(await modelcheck.status()); }
+  catch (e) { res.status(400).json({ error: errorMessage(e) }); }
+});
+
+app.post('/api/admin/models/revert', requireAdmin, async (req, res) => {
+  try { await modelcheck.revertTier(req.body.tier); res.json(await modelcheck.status()); }
+  catch (e) { res.status(400).json({ error: errorMessage(e) }); }
+});
+
+app.post('/api/admin/models/snooze', requireAdmin, async (req, res) => {
+  try { await modelcheck.snooze(); res.json(await modelcheck.status()); }
+  catch (e) { res.status(400).json({ error: errorMessage(e) }); }
 });
 
 // ==================== ARTICLE ANALYTICS API ENDPOINTS ====================
@@ -1312,11 +1055,14 @@ app.get('/api/article-analytics/summary', requireArticleAnalyticsAuth, async (re
     const articleType = req.query.article_type || 'all';
     const accessType = req.query.access_type || 'all';
 
+    // Quote values as SQL string literals (doubling single quotes) so query
+    // parameters can't inject SQL.
+    const lit = v => `'${String(v).replace(/'/g, "''")}'`;
     let dateFilter = days > 0 ? `published_date >= date('now', '-${days} days')` : '1=1';
-    let sourceFilter = source !== 'all' ? `source = '${source}'` : '1=1';
-    let listFilter = listName !== 'all' ? `list_name = '${listName}'` : '1=1';
-    let typeFilter = articleType !== 'all' ? `article_type = '${articleType}'` : '1=1';
-    let accessFilter = accessType !== 'all' ? `access_type = '${accessType}'` : '1=1';
+    let sourceFilter = source !== 'all' ? `source = ${lit(source)}` : '1=1';
+    let listFilter = listName !== 'all' ? `list_name = ${lit(listName)}` : '1=1';
+    let typeFilter = articleType !== 'all' ? `article_type = ${lit(articleType)}` : '1=1';
+    let accessFilter = accessType !== 'all' ? `access_type = ${lit(accessType)}` : '1=1';
     let whereClause = `WHERE ${dateFilter} AND ${sourceFilter} AND ${listFilter} AND ${typeFilter} AND ${accessFilter}`;
 
     // Total stats
@@ -1662,11 +1408,25 @@ app.post('/api/article-analytics/sync', requireArticleAnalyticsAuth, (req, res) 
   res.end();
 });
 
-// Initialize database and start server
-initDatabase().then(() => {
+
+// ==================== STARTUP ====================
+function tursoStore() {
+  return {
+    all: async (sql, args = []) => (await db.execute({ sql, args })).rows,
+    get: async (sql, args = []) => (await db.execute({ sql, args })).rows[0] || null,
+    run: async (sql, args = []) => db.execute({ sql, args }),
+  };
+}
+
+initDatabase().then(async () => {
+  await storage.initStorage(tursoStore());
+  setUsageSink(storage.recordUsage);
+  await modelcheck.loadOverrides();
+  modelcheck.startModelChecks();
   app.listen(PORT, () => {
     console.log(`Editorial Assistant running at http://localhost:${PORT}`);
     console.log(`Article Analytics available at http://localhost:${PORT}/article-analytics`);
+    console.log('Models:', Object.entries(tierInfo()).map(([t, v]) => `${t}=${v.model}`).join(', '));
   });
 }).catch(err => {
   console.error('Failed to initialize database:', err);
