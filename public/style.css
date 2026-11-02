@@ -860,3 +860,61 @@ sup.v-incorrect { color: #dc2626; } sup.v-imprecise { color: #ea580c; } sup.v-un
 .warn-text { color: #b45309; }
 pre { white-space: pre-wrap; font-size: 0.8rem; background: #f9fafb; padding: 0.5rem; border-radius: 4px; }
 #admin .result-box, details.result-box { margin-bottom: 1rem; }
+
+/* ==================== v2.1: copy, filters, IG cards ==================== */
+.title-row { grid-template-columns: 1fr 1fr 1fr; }
+.under-textarea { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin: -0.25rem 0 0.9rem; }
+.under-textarea .field-hint { margin: 0; }
+.mini-btn.strong { background: #1a365d; color: #fff; border-color: #1a365d; }
+.mini-btn.strong:hover { background: #0f2744; }
+.mini-btn.on { background: #ecfdf5; border-color: #10b981; color: #065f46; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.toolbar-actions { display: flex; gap: 0.4rem; }
+.seg { display: inline-flex; border: 1px solid #d1d5db; border-radius: 4px; overflow: hidden; }
+.seg-btn { background: #fff; color: #374151; border: none; border-right: 1px solid #d1d5db; padding: 0.35rem 0.8rem; font-size: 0.85rem; border-radius: 0; }
+.seg-btn:last-child { border-right: none; }
+.seg-btn:hover { background: #f3f4f6; }
+.seg-btn.active { background: #1a365d; color: #fff; }
+mark.ce-applied { background: #dcfce7; border-bottom: 2px solid #16a34a; }
+sup.ce-applied { color: #16a34a; }
+mark.ce-accepted { background: #dcfce7; border-bottom-color: #16a34a; }
+.issue-item.accepted { border-color: #86efac; background: #f0fdf4; }
+
+/* fact-check filter chips */
+.legend button.hl { font: inherit; font-size: 0.8rem; color: #111827; padding: 2px 8px; border-radius: 3px; cursor: pointer; border-top: none; border-left: none; border-right: none; }
+.legend button.hl:disabled { opacity: 0.4; cursor: default; }
+.legend button.hl.active { box-shadow: 0 0 0 2px #1a365d; }
+.legend button.hl .n { font-weight: 700; margin-left: 2px; }
+.legend button.v-opinion { background: #f3f4f6; border-bottom: 2px solid #9ca3af; }
+.legend .legend-reset { background: none; color: #1a365d; text-decoration: underline; padding: 2px 4px; font-size: 0.8rem; }
+#fc-filtered-title { display: flex; justify-content: space-between; align-items: baseline; }
+.doc-view[data-filter]:not([data-filter=""]) mark.hl { opacity: 0.25; }
+.doc-view[data-filter="incorrect"] mark.v-incorrect, .doc-view[data-filter="imprecise"] mark.v-imprecise,
+.doc-view[data-filter="unsupported"] mark.v-unsupported, .doc-view[data-filter="correct"] mark.v-correct,
+.doc-view[data-filter="pending"] mark.v-pending, .doc-view[data-filter="legal"] mark.legal { opacity: 1; }
+
+/* IG cards */
+.ig-controls { display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: flex-start; padding: 0.75rem 0 1rem; border-bottom: 1px solid #eee; margin-bottom: 1rem; }
+.ig-ctrl { display: flex; flex-direction: column; gap: 0.35rem; }
+.ig-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #6b7280; font-weight: 600; }
+.ig-count { padding: 0.35rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; }
+.ig-photo-ctrl { flex: 1; min-width: 320px; }
+.ig-photo-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.ig-photo-url { flex: 1; min-width: 160px; padding: 0.3rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; font-size: 0.85rem; }
+.ig-photo-y { vertical-align: middle; width: 140px; }
+.ig-buttons { flex-direction: row; gap: 0.5rem; align-self: flex-end; }
+.ig-buttons button { padding: 0.5rem 1rem; font-size: 0.9rem; }
+.ig-strip { display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 0.75rem; scroll-snap-type: x proximity; }
+.ig-card { flex: 0 0 280px; scroll-snap-align: start; }
+.ig-canvas { width: 280px; height: 350px; display: block; border: 1px solid #e5e7eb; background: #f9fafb; }
+.ig-card-head { display: flex; justify-content: space-between; align-items: center; margin: 0.4rem 0 0.2rem; font-size: 0.8rem; color: #374151; font-weight: 600; }
+.ig-card-tools { display: flex; gap: 0.25rem; }
+.ig-card-tools .mini-btn { padding: 0.15rem 0.45rem; }
+.ig-field { display: block; margin: 0.35rem 0 0; font-weight: 400; }
+.ig-field span { display: block; font-size: 0.72rem; color: #6b7280; margin-bottom: 0.15rem; }
+.ig-field input, .ig-field textarea { width: 100%; padding: 0.35rem 0.45rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; font-size: 0.85rem; resize: vertical; }
+.ig-warn { font-size: 0.78rem; color: #92400e; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 3px; padding: 0.25rem 0.4rem; margin-top: 0.25rem; }
+.ig-ok { font-size: 0.78rem; color: #065f46; margin-top: 0.25rem; }
+.ig-add { flex: 0 0 160px; display: flex; flex-direction: column; gap: 0.4rem; justify-content: center; align-items: stretch; border: 1px dashed #d1d5db; border-radius: 6px; padding: 1rem; height: 350px; }
+#social-panel-igcards.drag-over { outline: 3px dashed #0d9488; outline-offset: 4px; }
+@media (max-width: 900px) { .title-row { grid-template-columns: 1fr; } .under-textarea { flex-direction: column; } }
